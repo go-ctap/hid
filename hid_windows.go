@@ -1,7 +1,6 @@
 //go:generate powershell -Command "go tool cgo -godefs types_hid_windows.go | Set-Content -Path ztypes_hid_windows.go -Encoding UTF8"
 package hid
 
-import "C"
 import (
 	"bytes"
 	"errors"
