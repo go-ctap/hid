@@ -19,6 +19,7 @@ var (
 	procHidD_GetAttributes                = modHidsdi.NewProc("HidD_GetAttributes")
 	procHidD_GetManufacturerString        = modHidsdi.NewProc("HidD_GetManufacturerString")
 	procHidD_GetProductString             = modHidsdi.NewProc("HidD_GetProductString")
+	procHidD_GetSerialNumberString        = modHidsdi.NewProc("HidD_GetSerialNumberString")
 	procHidD_GetPreparsedData             = modHidsdi.NewProc("HidD_GetPreparsedData")
 	procHidD_FreePreparsedData            = modHidsdi.NewProc("HidD_FreePreparsedData")
 	procHidP_GetCaps                      = modHidsdi.NewProc("HidP_GetCaps")
@@ -96,6 +97,20 @@ func freePreparsedData(preparsedData _PHIDP_PREPARSED_DATA) error {
 func getProductString(hidDeviceObject windows.Handle) ([]byte, error) {
 	buf := make([]byte, 126*2)
 	r1, _, err := procHidD_GetProductString.Call(
+		uintptr(hidDeviceObject),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)),
+	)
+	if r1 == 0 {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func getSerialNumberString(hidDeviceObject windows.Handle) ([]byte, error) {
+	buf := make([]byte, 126*2)
+	r1, _, err := procHidD_GetSerialNumberString.Call(
 		uintptr(hidDeviceObject),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
@@ -376,7 +391,8 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			}
 
 			deviceInfo := &DeviceInfo{
-				Path: devicePath,
+				Path:         devicePath,
+				InterfaceNbr: int(interfaceMemberIndex),
 			}
 
 			attrs, err := getAttributes(hFile)
@@ -386,6 +402,7 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			}
 			deviceInfo.VendorID = attrs.VendorID
 			deviceInfo.ProductID = attrs.ProductID
+			deviceInfo.ReleaseNbr = attrs.VersionNumber
 
 			mfrStr, _ := getManufacturerString(hFile)
 			if len(mfrStr) > 0 {
@@ -399,6 +416,15 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			productStr, _ := getProductString(hFile)
 			if len(mfrStr) > 0 {
 				deviceInfo.ProductStr, err = decoder.String(strings.TrimRight(string(productStr), string([]byte{0})) + "\u0000")
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+			}
+
+			serialNumberStr, _ := getSerialNumberString(hFile)
+			if len(serialNumberStr) > 0 {
+				deviceInfo.SerialNbr, err = decoder.String(strings.TrimRight(string(serialNumberStr), string([]byte{0})) + "\u0000")
 				if err != nil {
 					yield(nil, err)
 					return

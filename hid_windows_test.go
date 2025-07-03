@@ -25,7 +25,6 @@ func TestCTAPHID(t *testing.T) {
 		}
 
 		devInfos = append(devInfos, devInfo)
-		break
 	}
 
 	for _, devInfo := range devInfos {
