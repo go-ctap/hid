@@ -3,7 +3,7 @@
 Working prototype to prove that you don't need `cgo` to work with HID devices.
 Currently, only Windows is supported.
 
-Developed as part of [go-ctaphid](https://github.com/savely-krasovsky/go-ctaphid).
+Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
 
 ## Status
 

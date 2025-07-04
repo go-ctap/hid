@@ -3,6 +3,7 @@ package hid
 import (
 	"testing"
 
+	"github.com/goforj/godump"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +20,8 @@ func TestCTAPHID(t *testing.T) {
 
 	for devInfo, err := range Enumerate() {
 		require.NoError(t, err)
+
+		godump.Dump(devInfo)
 
 		if devInfo.UsagePage != 0xf1d0 || devInfo.Usage != 0x01 {
 			continue

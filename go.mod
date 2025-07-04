@@ -1,8 +1,9 @@
-module github.com/savely-krasovsky/go-hid
+module github.com/go-ctap/hid
 
 go 1.24
 
 require (
+	github.com/goforj/godump v1.5.0
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/sys v0.33.0
 	golang.org/x/text v0.26.0
