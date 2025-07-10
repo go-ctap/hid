@@ -22,35 +22,35 @@ const (
 type ItemTag uint8
 
 const (
-	MainItemTagInput         ItemTag = 0b100000
-	MainItemTagOutput        ItemTag = 0b100100
-	MainItemTagFeature       ItemTag = 0b101100
-	MainItemTagCollection    ItemTag = 0b101000
-	MainItemTagEndCollection ItemTag = 0b110000
+	ItemTagMainInput         ItemTag = 0b100000
+	ItemTagMainOutput        ItemTag = 0b100100
+	ItemTagMainFeature       ItemTag = 0b101100
+	ItemTagMainCollection    ItemTag = 0b101000
+	ItemTagMainEndCollection ItemTag = 0b110000
 
-	GlobalItemTagUsagePage       ItemTag = 0b000001
-	GlobalItemTagLogicalMinimum  ItemTag = 0b000101
-	GlobalItemTagLogicalMaximum  ItemTag = 0b001001
-	GlobalItemTagPhysicalMinimum ItemTag = 0b001101
-	GlobalItemTagPhysicalMaximum ItemTag = 0b010001
-	GlobalItemTagUnitExponent    ItemTag = 0b010101
-	GlobalItemTagUnit            ItemTag = 0b011001
-	GlobalItemTagReportSize      ItemTag = 0b011101
-	GlobalItemTagReportID        ItemTag = 0b100001
-	GlobalItemTagReportCount     ItemTag = 0b100101
-	GlobalItemTagPush            ItemTag = 0b101001
-	GlobalItemTagPop             ItemTag = 0b101101
+	ItemTagGlobalUsagePage       ItemTag = 0b000001
+	ItemTagGlobalLogicalMinimum  ItemTag = 0b000101
+	ItemTagGlobalLogicalMaximum  ItemTag = 0b001001
+	ItemTagGlobalPhysicalMinimum ItemTag = 0b001101
+	ItemTagGlobalPhysicalMaximum ItemTag = 0b010001
+	ItemTagGlobalUnitExponent    ItemTag = 0b010101
+	ItemTagGlobalUnit            ItemTag = 0b011001
+	ItemTagGlobalReportSize      ItemTag = 0b011101
+	ItemTagGlobalReportID        ItemTag = 0b100001
+	ItemTagGlobalReportCount     ItemTag = 0b100101
+	ItemTagGlobalPush            ItemTag = 0b101001
+	ItemTagGlobalPop             ItemTag = 0b101101
 
-	LocalItemTagUsage             ItemTag = 0b000010
-	LocalItemTagUsageMinimum      ItemTag = 0b000110
-	LocalItemTagUsageMaximum      ItemTag = 0b001010
-	LocalItemTagDesignatorIndex   ItemTag = 0b001110
-	LocalItemTagDesignatorMinimum ItemTag = 0b010010
-	LocalItemTagDesignatorMaximum ItemTag = 0b010110
-	LocalItemTagStringIndex       ItemTag = 0b011110
-	LocalItemTagStringMinimum     ItemTag = 0b100010
-	LocalItemTagStringMaximum     ItemTag = 0b100110
-	LocalItemTagDelimiter         ItemTag = 0b101010
+	ItemTagLocalUsage             ItemTag = 0b000010
+	ItemTagLocalUsageMinimum      ItemTag = 0b000110
+	ItemTagLocalUsageMaximum      ItemTag = 0b001010
+	ItemTagLocalDesignatorIndex   ItemTag = 0b001110
+	ItemTagLocalDesignatorMinimum ItemTag = 0b010010
+	ItemTagLocalDesignatorMaximum ItemTag = 0b010110
+	ItemTagLocalStringIndex       ItemTag = 0b011110
+	ItemTagLocalStringMinimum     ItemTag = 0b100010
+	ItemTagLocalStringMaximum     ItemTag = 0b100110
+	ItemTagLocalDelimiter         ItemTag = 0b101010
 )
 
 func (t ItemTag) Type() ItemType {

@@ -18,7 +18,7 @@ func (p UsagePage) Size() ItemSize {
 }
 
 func (p UsagePage) Tag() ItemTag {
-	return GlobalItemTagUsagePage
+	return ItemTagGlobalUsagePage
 }
 
 func (p UsagePage) Value() uint16 {
@@ -36,47 +36,11 @@ func (u Usage) Size() ItemSize {
 }
 
 func (u Usage) Tag() ItemTag {
-	return LocalItemTagUsage
+	return ItemTagLocalUsage
 }
 
 func (u Usage) Value() uint16 {
 	return uint16(u)
-}
-
-type Collection CollectionItemType
-
-func (c Collection) Name() string {
-	return "Collection"
-}
-
-func (c Collection) Size() ItemSize {
-	return ItemSize(1)
-}
-
-func (c Collection) Tag() ItemTag {
-	return MainItemTagCollection
-}
-
-func (c Collection) Value() CollectionItemType {
-	return CollectionItemType(c)
-}
-
-type EndCollection struct{}
-
-func (e EndCollection) Name() string {
-	return "End Collection"
-}
-
-func (e EndCollection) Size() ItemSize {
-	return ItemSize(0)
-}
-
-func (e EndCollection) Tag() ItemTag {
-	return MainItemTagEndCollection
-}
-
-func (e EndCollection) Value() struct{} {
-	return struct{}{}
 }
 
 type Input InputFlags
@@ -90,7 +54,7 @@ func (i Input) Size() ItemSize {
 }
 
 func (i Input) Tag() ItemTag {
-	return MainItemTagInput
+	return ItemTagMainInput
 }
 
 func (i Input) Value() InputFlags {
@@ -108,7 +72,7 @@ func (o Output) Size() ItemSize {
 }
 
 func (o Output) Tag() ItemTag {
-	return MainItemTagOutput
+	return ItemTagMainOutput
 }
 
 func (o Output) Value() OutputFlags {
@@ -126,9 +90,45 @@ func (f Feature) Size() ItemSize {
 }
 
 func (f Feature) Tag() ItemTag {
-	return MainItemTagFeature
+	return ItemTagMainFeature
 }
 
 func (f Feature) Value() FeatureFlags {
 	return FeatureFlags(f)
+}
+
+type Collection CollectionItemType
+
+func (c Collection) Name() string {
+	return "Collection"
+}
+
+func (c Collection) Size() ItemSize {
+	return ItemSize(1)
+}
+
+func (c Collection) Tag() ItemTag {
+	return ItemTagMainCollection
+}
+
+func (c Collection) Value() CollectionItemType {
+	return CollectionItemType(c)
+}
+
+type EndCollection struct{}
+
+func (e EndCollection) Name() string {
+	return "End Collection"
+}
+
+func (e EndCollection) Size() ItemSize {
+	return ItemSize(0)
+}
+
+func (e EndCollection) Tag() ItemTag {
+	return ItemTagMainEndCollection
+}
+
+func (e EndCollection) Value() struct{} {
+	return struct{}{}
 }

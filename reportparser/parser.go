@@ -16,40 +16,40 @@ func ParseReport(b []byte) Items {
 		i++
 
 		switch tag {
-		case MainItemTagInput:
-			r = append(r, Input(hidValue(size, b[i:])))
-		case MainItemTagOutput:
-			r = append(r, Output(hidValue(size, b[i:])))
-		case MainItemTagFeature:
-			r = append(r, Feature(hidValue(size, b[i:])))
-		case MainItemTagCollection:
+		case ItemTagMainInput:
+			r = append(r, Input(parseUint32Value(size, b[i:])))
+		case ItemTagMainOutput:
+			r = append(r, Output(parseUint32Value(size, b[i:])))
+		case ItemTagMainFeature:
+			r = append(r, Feature(parseUint32Value(size, b[i:])))
+		case ItemTagMainCollection:
 			r = append(r, Collection(b[i]))
-		case MainItemTagEndCollection:
+		case ItemTagMainEndCollection:
 			r = append(r, EndCollection{})
-		case GlobalItemTagUsagePage:
-			r = append(r, UsagePage(hidValue(size, b[i:])))
-		case GlobalItemTagLogicalMinimum:
-		case GlobalItemTagLogicalMaximum:
-		case GlobalItemTagPhysicalMinimum:
-		case GlobalItemTagPhysicalMaximum:
-		case GlobalItemTagUnitExponent:
-		case GlobalItemTagUnit:
-		case GlobalItemTagReportSize:
-		case GlobalItemTagReportID:
-		case GlobalItemTagReportCount:
-		case GlobalItemTagPush:
-		case GlobalItemTagPop:
-		case LocalItemTagUsage:
-			r = append(r, Usage(hidValue(size, b[i:])))
-		case LocalItemTagUsageMinimum:
-		case LocalItemTagUsageMaximum:
-		case LocalItemTagDesignatorIndex:
-		case LocalItemTagDesignatorMinimum:
-		case LocalItemTagDesignatorMaximum:
-		case LocalItemTagStringIndex:
-		case LocalItemTagStringMinimum:
-		case LocalItemTagStringMaximum:
-		case LocalItemTagDelimiter:
+		case ItemTagGlobalUsagePage:
+			r = append(r, UsagePage(parseUint32Value(size, b[i:])))
+		case ItemTagGlobalLogicalMinimum:
+		case ItemTagGlobalLogicalMaximum:
+		case ItemTagGlobalPhysicalMinimum:
+		case ItemTagGlobalPhysicalMaximum:
+		case ItemTagGlobalUnitExponent:
+		case ItemTagGlobalUnit:
+		case ItemTagGlobalReportSize:
+		case ItemTagGlobalReportID:
+		case ItemTagGlobalReportCount:
+		case ItemTagGlobalPush:
+		case ItemTagGlobalPop:
+		case ItemTagLocalUsage:
+			r = append(r, Usage(parseUint32Value(size, b[i:])))
+		case ItemTagLocalUsageMinimum:
+		case ItemTagLocalUsageMaximum:
+		case ItemTagLocalDesignatorIndex:
+		case ItemTagLocalDesignatorMinimum:
+		case ItemTagLocalDesignatorMaximum:
+		case ItemTagLocalStringIndex:
+		case ItemTagLocalStringMinimum:
+		case ItemTagLocalStringMaximum:
+		case ItemTagLocalDelimiter:
 		}
 
 		// skip read bytes
@@ -68,7 +68,7 @@ func ParseReport(b []byte) Items {
 	return r
 }
 
-func hidValue(size ItemSize, buf []byte) uint32 {
+func parseUint32Value(size ItemSize, buf []byte) uint32 {
 	switch size {
 	case ItemSize0:
 		return 0
