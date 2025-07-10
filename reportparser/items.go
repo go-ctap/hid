@@ -2,7 +2,6 @@ package reportparser
 
 type Item[T any] interface {
 	Name() string
-	Size() ItemSize
 	Tag() ItemTag
 	Value() T
 }
@@ -13,10 +12,6 @@ func (p UsagePage) Name() string {
 	return "Usage Page"
 }
 
-func (p UsagePage) Size() ItemSize {
-	return ItemSize(2)
-}
-
 func (p UsagePage) Tag() ItemTag {
 	return ItemTagGlobalUsagePage
 }
@@ -25,14 +20,38 @@ func (p UsagePage) Value() uint16 {
 	return uint16(p)
 }
 
+type LogicalMinimum uint32
+
+func (p LogicalMinimum) Name() string {
+	return "Logical Minimum"
+}
+
+func (p LogicalMinimum) Tag() ItemTag {
+	return ItemTagGlobalLogicalMinimum
+}
+
+func (p LogicalMinimum) Value() uint32 {
+	return uint32(p)
+}
+
+type LogicalMaximum uint32
+
+func (p LogicalMaximum) Name() string {
+	return "Logical Maximum"
+}
+
+func (p LogicalMaximum) Tag() ItemTag {
+	return ItemTagGlobalLogicalMaximum
+}
+
+func (p LogicalMaximum) Value() uint32 {
+	return uint32(p)
+}
+
 type Usage uint16
 
 func (u Usage) Name() string {
 	return "Usage"
-}
-
-func (u Usage) Size() ItemSize {
-	return ItemSize(2)
 }
 
 func (u Usage) Tag() ItemTag {
@@ -49,10 +68,6 @@ func (i Input) Name() string {
 	return "Input"
 }
 
-func (i Input) Size() ItemSize {
-	return ItemSize(4)
-}
-
 func (i Input) Tag() ItemTag {
 	return ItemTagMainInput
 }
@@ -65,10 +80,6 @@ type Output OutputFlags
 
 func (o Output) Name() string {
 	return "Output"
-}
-
-func (o Output) Size() ItemSize {
-	return ItemSize(4)
 }
 
 func (o Output) Tag() ItemTag {
@@ -85,10 +96,6 @@ func (f Feature) Name() string {
 	return "Feature"
 }
 
-func (f Feature) Size() ItemSize {
-	return ItemSize(4)
-}
-
 func (f Feature) Tag() ItemTag {
 	return ItemTagMainFeature
 }
@@ -101,10 +108,6 @@ type Collection CollectionItemType
 
 func (c Collection) Name() string {
 	return "Collection"
-}
-
-func (c Collection) Size() ItemSize {
-	return ItemSize(1)
 }
 
 func (c Collection) Tag() ItemTag {
@@ -121,14 +124,52 @@ func (e EndCollection) Name() string {
 	return "End Collection"
 }
 
-func (e EndCollection) Size() ItemSize {
-	return ItemSize(0)
-}
-
 func (e EndCollection) Tag() ItemTag {
 	return ItemTagMainEndCollection
 }
 
 func (e EndCollection) Value() struct{} {
 	return struct{}{}
+}
+
+type ReportSize byte
+
+func (r ReportSize) Name() string {
+	return "Report Size"
+}
+
+func (r ReportSize) Tag() ItemTag {
+	return ItemTagGlobalReportSize
+}
+
+func (r ReportSize) Value() ReportSize {
+	return r
+}
+
+type ReportID byte
+
+func (r ReportID) Name() string {
+	return "Report ID"
+}
+
+func (r ReportID) Tag() ItemTag {
+	return ItemTagGlobalReportID
+}
+
+func (r ReportID) Value() ReportID {
+	return r
+}
+
+type ReportCount byte
+
+func (r ReportCount) Name() string {
+	return "Report Count"
+}
+
+func (r ReportCount) Tag() ItemTag {
+	return ItemTagGlobalReportCount
+}
+
+func (r ReportCount) Value() ReportCount {
+	return r
 }

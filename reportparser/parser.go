@@ -17,30 +17,35 @@ func ParseReport(b []byte) Items {
 
 		switch tag {
 		case ItemTagMainInput:
-			r = append(r, Input(parseUint32Value(size, b[i:])))
+			r = append(r, Input(parseUintValue(size, b[i:])))
 		case ItemTagMainOutput:
-			r = append(r, Output(parseUint32Value(size, b[i:])))
+			r = append(r, Output(parseUintValue(size, b[i:])))
 		case ItemTagMainFeature:
-			r = append(r, Feature(parseUint32Value(size, b[i:])))
+			r = append(r, Feature(parseUintValue(size, b[i:])))
 		case ItemTagMainCollection:
 			r = append(r, Collection(b[i]))
 		case ItemTagMainEndCollection:
 			r = append(r, EndCollection{})
 		case ItemTagGlobalUsagePage:
-			r = append(r, UsagePage(parseUint32Value(size, b[i:])))
+			r = append(r, UsagePage(parseUintValue(size, b[i:])))
 		case ItemTagGlobalLogicalMinimum:
+			r = append(r, LogicalMinimum(parseUintValue(size, b[i:])))
 		case ItemTagGlobalLogicalMaximum:
+			r = append(r, LogicalMaximum(parseUintValue(size, b[i:])))
 		case ItemTagGlobalPhysicalMinimum:
 		case ItemTagGlobalPhysicalMaximum:
 		case ItemTagGlobalUnitExponent:
 		case ItemTagGlobalUnit:
 		case ItemTagGlobalReportSize:
+			r = append(r, ReportSize(b[i]))
 		case ItemTagGlobalReportID:
+			r = append(r, ReportID(b[i]))
 		case ItemTagGlobalReportCount:
+			r = append(r, ReportCount(b[i]))
 		case ItemTagGlobalPush:
 		case ItemTagGlobalPop:
 		case ItemTagLocalUsage:
-			r = append(r, Usage(parseUint32Value(size, b[i:])))
+			r = append(r, Usage(parseUintValue(size, b[i:])))
 		case ItemTagLocalUsageMinimum:
 		case ItemTagLocalUsageMaximum:
 		case ItemTagLocalDesignatorIndex:
@@ -68,7 +73,7 @@ func ParseReport(b []byte) Items {
 	return r
 }
 
-func parseUint32Value(size ItemSize, buf []byte) uint32 {
+func parseUintValue(size ItemSize, buf []byte) uint32 {
 	switch size {
 	case ItemSize0:
 		return 0
