@@ -17,8 +17,8 @@ Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
   - [ ] Open
       - [ ] Read
       - [ ] Write
-- [ ] Linux
-  - [ ] Enumerate
-  - [ ] Open
-     - [ ] Read
-     - [ ] Write
+- [x] Linux
+  - [x] Enumerate
+  - [x] Open
+     - [x] Read
+     - [x] Write
