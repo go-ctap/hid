@@ -222,7 +222,8 @@ func setupDiGetDeviceInterfaceDetailW(
 		return nil, nil, err
 	}
 
-	deviceInterfaceDetailData = new(_SP_DEVICE_INTERFACE_DETAIL_DATA_W)
+	detailDataBuf := make([]byte, requiredSize)
+	deviceInterfaceDetailData = (*_SP_DEVICE_INTERFACE_DETAIL_DATA_W)(unsafe.Pointer(&detailDataBuf[0]))
 	deviceInterfaceDetailData.CbSize = uint32(unsafe.Sizeof(*deviceInterfaceDetailData))
 	deviceInfoData = new(_SP_DEVINFO_DATA)
 	deviceInfoData.CbSize = uint32(unsafe.Sizeof(*deviceInfoData))
@@ -511,7 +512,8 @@ func (d *Device) Read(p []byte) (n int, err error) {
 	}
 
 	buf := make([]byte, d.inputReportByteLength)
-	if err := windows.ReadFile(d.hFile, buf, nil, d.overlapped); err != nil {
+	var done uint32
+	if err := windows.ReadFile(d.hFile, buf, &done, d.overlapped); err != nil {
 		if !errors.Is(err, windows.ERROR_IO_PENDING) {
 			return 0, err
 		}
@@ -525,7 +527,6 @@ func (d *Device) Read(p []byte) (n int, err error) {
 		return 0, fmt.Errorf("unexpected event: %d", event)
 	}
 
-	var done uint32
 	if err := windows.GetOverlappedResult(d.hFile, d.overlapped, &done, true); err != nil {
 		return 0, err
 	}
@@ -547,13 +548,13 @@ func (d *Device) Write(p []byte) (n int, err error) {
 	copy(buf, p)
 
 	ol := new(windows.Overlapped)
-	if err := windows.WriteFile(d.hFile, buf, nil, ol); err != nil {
+	var done uint32
+	if err := windows.WriteFile(d.hFile, buf, &done, ol); err != nil {
 		if !errors.Is(err, windows.ERROR_IO_PENDING) {
 			return 0, err
 		}
 	}
 
-	var done uint32
 	if err := windows.GetOverlappedResult(d.hFile, ol, &done, true); err != nil {
 		return 0, err
 	}
