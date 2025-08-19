@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/goforj/godump"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +15,10 @@ func TestCTAPHID(t *testing.T) {
 	var devInfos []*DeviceInfo
 
 	for devInfo, err := range Enumerate() {
-		require.NoError(t, err)
+		assert.NoError(t, err)
+		if err != nil {
+			continue
+		}
 
 		godump.Dump(devInfo)
 

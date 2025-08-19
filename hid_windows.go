@@ -2,7 +2,6 @@
 package hid
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"iter"
@@ -14,21 +13,20 @@ import (
 )
 
 var (
-	modHidsdi                             = windows.NewLazySystemDLL("hid.dll")
-	procHidD_GetHidGuid                   = modHidsdi.NewProc("HidD_GetHidGuid")
-	procHidD_GetAttributes                = modHidsdi.NewProc("HidD_GetAttributes")
-	procHidD_GetManufacturerString        = modHidsdi.NewProc("HidD_GetManufacturerString")
-	procHidD_GetProductString             = modHidsdi.NewProc("HidD_GetProductString")
-	procHidD_GetSerialNumberString        = modHidsdi.NewProc("HidD_GetSerialNumberString")
-	procHidD_GetPreparsedData             = modHidsdi.NewProc("HidD_GetPreparsedData")
-	procHidD_FreePreparsedData            = modHidsdi.NewProc("HidD_FreePreparsedData")
-	procHidP_GetCaps                      = modHidsdi.NewProc("HidP_GetCaps")
-	modSetupapi                           = windows.NewLazySystemDLL("setupapi.dll")
-	procSetupDiGetClassDevsW              = modSetupapi.NewProc("SetupDiGetClassDevsW")
-	procSetupDiEnumDeviceInfo             = modSetupapi.NewProc("SetupDiEnumDeviceInfo")
-	procSetupDiEnumDeviceInterfaces       = modSetupapi.NewProc("SetupDiEnumDeviceInterfaces")
-	procSetupDiGetDeviceInterfaceDetailW  = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
-	procSetupDiGetDeviceRegistryPropertyW = modSetupapi.NewProc("SetupDiGetDeviceRegistryPropertyW")
+	modHidsdi                            = windows.NewLazySystemDLL("hid.dll")
+	procHidD_GetHidGuid                  = modHidsdi.NewProc("HidD_GetHidGuid")
+	procHidD_GetAttributes               = modHidsdi.NewProc("HidD_GetAttributes")
+	procHidD_GetManufacturerString       = modHidsdi.NewProc("HidD_GetManufacturerString")
+	procHidD_GetProductString            = modHidsdi.NewProc("HidD_GetProductString")
+	procHidD_GetSerialNumberString       = modHidsdi.NewProc("HidD_GetSerialNumberString")
+	procHidD_GetPreparsedData            = modHidsdi.NewProc("HidD_GetPreparsedData")
+	procHidD_FreePreparsedData           = modHidsdi.NewProc("HidD_FreePreparsedData")
+	procHidP_GetCaps                     = modHidsdi.NewProc("HidP_GetCaps")
+	modSetupapi                          = windows.NewLazySystemDLL("setupapi.dll")
+	procSetupDiGetClassDevsW             = modSetupapi.NewProc("SetupDiGetClassDevsW")
+	procSetupDiEnumDeviceInterfaces      = modSetupapi.NewProc("SetupDiEnumDeviceInterfaces")
+	procSetupDiGetDeviceInterfaceDetailW = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
+	procSetupDiGetDevicePropertyW        = modSetupapi.NewProc("SetupDiGetDevicePropertyW")
 )
 
 func getHidGuid() (*windows.GUID, error) {
@@ -45,6 +43,7 @@ func getHidGuid() (*windows.GUID, error) {
 
 func getAttributes(hidDeviceObject windows.Handle) (*_HIDD_ATTRIBUTES, error) {
 	var hidAttributes _HIDD_ATTRIBUTES
+	hidAttributes.Size = uint32(unsafe.Sizeof(hidAttributes))
 	r1, _, err := procHidD_GetAttributes.Call(
 		uintptr(hidDeviceObject),
 		uintptr(unsafe.Pointer(&hidAttributes)),
@@ -139,7 +138,7 @@ func setupDiGetClassDevs(
 	guid *windows.GUID,
 	enumerator string,
 	hwndParent windows.Handle,
-	flags uint32,
+	flags windows.DIGCF,
 ) (_HDEVINFO, error) {
 	var enumeratorW *uint16 = nil
 	if enumerator != "" {
@@ -157,25 +156,6 @@ func setupDiGetClassDevs(
 	}
 
 	return _HDEVINFO(unsafe.Pointer(r1)), nil
-}
-
-func setupDiEnumDeviceInfo(
-	hdevinfo _HDEVINFO,
-	memberIndex uint32,
-) (*_SP_DEVINFO_DATA, error) {
-	var deviceInfoData _SP_DEVINFO_DATA
-	deviceInfoData.CbSize = uint32(unsafe.Sizeof(deviceInfoData))
-
-	r1, _, err := procSetupDiEnumDeviceInfo.Call(
-		uintptr(unsafe.Pointer(hdevinfo)),
-		uintptr(memberIndex),
-		uintptr(unsafe.Pointer(&deviceInfoData)),
-	)
-	if r1 == 0 {
-		return nil, err
-	}
-
-	return &deviceInfoData, nil
 }
 
 func setupDiEnumDeviceInterfaces(
@@ -243,36 +223,40 @@ func setupDiGetDeviceInterfaceDetailW(
 	return deviceInterfaceDetailData, deviceInfoData, nil
 }
 
-func setupDiGetDeviceRegistryPropertyW(
+func setupDiGetDevicePropertyW(
 	deviceInfoSet _HDEVINFO,
 	deviceInfoData *_SP_DEVINFO_DATA,
-	property uint32,
+	devPropKey *windows.DEVPROPKEY,
 ) (
-	propertyRegDataType uint32,
+	devPropType windows.DEVPROPTYPE,
 	propertyBuffer []byte,
 	err error,
 ) {
 	var requiredSize uint32
-	r1, _, err := procSetupDiGetDeviceRegistryPropertyW.Call(
+	r1, _, err := procSetupDiGetDevicePropertyW.Call(
 		uintptr(unsafe.Pointer(deviceInfoSet)),
 		uintptr(unsafe.Pointer(deviceInfoData)),
-		uintptr(property),
-		uintptr(unsafe.Pointer(&propertyRegDataType)),
+		uintptr(unsafe.Pointer(devPropKey)),
+		uintptr(unsafe.Pointer(&devPropType)),
 		0,
 		0,
 		uintptr(unsafe.Pointer(&requiredSize)),
+		0,
 	)
 	if r1 == 0 && !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
 		return 0, nil, err
 	}
 
+	if requiredSize == 0 {
+		return 0, nil, errors.New("invalid RequiredSize was returned")
+	}
 	propertyBuffer = make([]byte, requiredSize)
 
-	r1, _, err = procSetupDiGetDeviceRegistryPropertyW.Call(
+	r1, _, err = procSetupDiGetDevicePropertyW.Call(
 		uintptr(unsafe.Pointer(deviceInfoSet)),
 		uintptr(unsafe.Pointer(deviceInfoData)),
-		uintptr(property),
-		uintptr(unsafe.Pointer(&propertyRegDataType)),
+		uintptr(unsafe.Pointer(devPropKey)),
+		uintptr(unsafe.Pointer(&devPropType)),
 		uintptr(unsafe.Pointer(&propertyBuffer[0])),
 		uintptr(requiredSize),
 		uintptr(unsafe.Pointer(&requiredSize)),
@@ -281,7 +265,7 @@ func setupDiGetDeviceRegistryPropertyW(
 		return 0, nil, err
 	}
 
-	return propertyRegDataType, propertyBuffer, nil
+	return devPropType, propertyBuffer, nil
 }
 
 func Enumerate() iter.Seq2[*DeviceInfo, error] {
@@ -296,7 +280,7 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			guid,
 			"",
 			0,
-			_DIGCF_PRESENT|_DIGCF_DEVICEINTERFACE,
+			windows.DIGCF_PRESENT|windows.DIGCF_DEVICEINTERFACE,
 		)
 		if err != nil {
 			yield(nil, err)
@@ -318,7 +302,7 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 				return
 			}
 
-			deviceInterfaceDetailData, _, err := setupDiGetDeviceInterfaceDetailW(
+			deviceInterfaceDetailData, deviceInfoData, err := setupDiGetDeviceInterfaceDetailW(
 				deviceInfoSet,
 				deviceInterfaceData,
 			)
@@ -327,54 +311,31 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 				return
 			}
 
-			devicePath := windows.UTF16PtrToString(&deviceInterfaceDetailData.DevicePath[0])
-			decoder := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder()
-			hasDriver := false
-			for deviceMemberIndex := uint32(0); ; deviceMemberIndex++ {
-				deviceInfoData, err := setupDiEnumDeviceInfo(deviceInfoSet, deviceMemberIndex)
-				if err != nil {
-					if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
-						return
-					}
-					yield(nil, err)
-					return
-				}
-
-				_, classPropertyBuf, err := setupDiGetDeviceRegistryPropertyW(deviceInfoSet, deviceInfoData, _SPDRP_CLASS)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-
-				classNameRaw, err := decoder.Bytes(bytes.TrimSuffix(classPropertyBuf, []byte{0, 0}))
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-
-				if string(classNameRaw) == "HIDClass" {
-					_, driverPropertyBuf, err := setupDiGetDeviceRegistryPropertyW(deviceInfoSet, deviceInfoData, _SPDRP_DRIVER)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-
-					driverNameRaw, err := decoder.Bytes(bytes.TrimSuffix(driverPropertyBuf, []byte{0, 0}))
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-
-					hasDriver = string(driverNameRaw) != ""
-					break
-				}
-			}
-
-			if !hasDriver {
-				yield(nil, nil)
+			propertyType, statusBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &windows.DEVPROPKEY{
+				FmtID: windows.DEVPROPGUID(windows.GUID{
+					Data1: 0x4340a6c5,
+					Data2: 0x93fa,
+					Data3: 0x4706,
+					Data4: [8]byte{0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7},
+				}),
+				PID: 2,
+			})
+			if err != nil {
+				yield(nil, err)
 				return
 			}
+			if propertyType != windows.DEVPROP_TYPE_UINT32 {
+				yield(nil, errors.New("uint32 was expected"))
+			}
 
+			status := *(*uint32)(unsafe.Pointer(&statusBuf[0]))
+			if (status&_DN_HAS_PROBLEM) == _DN_HAS_PROBLEM ||
+				(status&_DN_STARTED) != _DN_STARTED ||
+				(status&_DN_DRIVER_LOADED) != _DN_DRIVER_LOADED {
+				continue
+			}
+
+			devicePath := windows.UTF16PtrToString(&deviceInterfaceDetailData.DevicePath[0])
 			devicePathPtr := windows.StringToUTF16Ptr(devicePath)
 
 			hFile, err := windows.CreateFile(
@@ -404,6 +365,8 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			deviceInfo.VendorID = attrs.VendorID
 			deviceInfo.ProductID = attrs.ProductID
 			deviceInfo.ReleaseNbr = attrs.VersionNumber
+
+			decoder := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder()
 
 			mfrStr, _ := getManufacturerString(hFile)
 			if len(mfrStr) > 0 {
