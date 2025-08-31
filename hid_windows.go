@@ -260,6 +260,7 @@ func setupDiGetDevicePropertyW(
 		uintptr(unsafe.Pointer(&propertyBuffer[0])),
 		uintptr(requiredSize),
 		uintptr(unsafe.Pointer(&requiredSize)),
+		0,
 	)
 	if r1 == 0 {
 		return 0, nil, err
@@ -326,6 +327,7 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			}
 			if propertyType != windows.DEVPROP_TYPE_UINT32 {
 				yield(nil, errors.New("uint32 was expected"))
+				return
 			}
 
 			status := *(*uint32)(unsafe.Pointer(&statusBuf[0]))
