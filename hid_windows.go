@@ -2,6 +2,7 @@
 package hid
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"iter"
@@ -25,6 +26,7 @@ var (
 	modSetupapi                          = windows.NewLazySystemDLL("setupapi.dll")
 	procSetupDiGetClassDevsW             = modSetupapi.NewProc("SetupDiGetClassDevsW")
 	procSetupDiEnumDeviceInterfaces      = modSetupapi.NewProc("SetupDiEnumDeviceInterfaces")
+	procSetupDiGetDeviceInstanceIdW      = modSetupapi.NewProc("SetupDiGetDeviceInstanceIdW")
 	procSetupDiGetDeviceInterfaceDetailW = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
 	procSetupDiGetDevicePropertyW        = modSetupapi.NewProc("SetupDiGetDevicePropertyW")
 )
@@ -104,7 +106,7 @@ func getProductString(hidDeviceObject windows.Handle) ([]byte, error) {
 		return nil, err
 	}
 
-	return buf, nil
+	return bytes.Clone(buf), nil
 }
 
 func getSerialNumberString(hidDeviceObject windows.Handle) ([]byte, error) {
@@ -118,7 +120,7 @@ func getSerialNumberString(hidDeviceObject windows.Handle) ([]byte, error) {
 		return nil, err
 	}
 
-	return buf, nil
+	return bytes.Clone(buf), nil
 }
 
 func getCaps(preparsedData _PHIDP_PREPARSED_DATA) (*_HIDP_CAPS, error) {
@@ -139,7 +141,7 @@ func setupDiGetClassDevs(
 	enumerator string,
 	hwndParent windows.Handle,
 	flags windows.DIGCF,
-) (_HDEVINFO, error) {
+) (windows.Handle, error) {
 	var enumeratorW *uint16 = nil
 	if enumerator != "" {
 		enumeratorW = windows.StringToUTF16Ptr(enumerator)
@@ -152,14 +154,14 @@ func setupDiGetClassDevs(
 		uintptr(flags),
 	)
 	if !errors.Is(err, windows.NOERROR) {
-		return nil, err
+		return 0, err
 	}
 
-	return _HDEVINFO(unsafe.Pointer(r1)), nil
+	return windows.Handle(r1), nil
 }
 
 func setupDiEnumDeviceInterfaces(
-	deviceInfoSet _HDEVINFO,
+	deviceInfoSet windows.Handle,
 	devInfoData *_SP_DEVINFO_DATA,
 	interfaceClassGuid *windows.GUID,
 	memberIndex uint32,
@@ -168,7 +170,7 @@ func setupDiEnumDeviceInterfaces(
 	deviceInterfaceData.CbSize = uint32(unsafe.Sizeof(deviceInterfaceData))
 
 	r1, _, err := procSetupDiEnumDeviceInterfaces.Call(
-		uintptr(unsafe.Pointer(deviceInfoSet)),
+		uintptr(deviceInfoSet),
 		uintptr(unsafe.Pointer(devInfoData)),
 		uintptr(unsafe.Pointer(interfaceClassGuid)),
 		uintptr(memberIndex),
@@ -181,8 +183,39 @@ func setupDiEnumDeviceInterfaces(
 	return &deviceInterfaceData, nil
 }
 
+func setupDiGetDeviceInstanceIdW(
+	deviceSetInfo windows.Handle,
+	devInfoData *_SP_DEVINFO_DATA,
+) (string, error) {
+	var requiredSize uint32
+	r1, _, err := procSetupDiGetDeviceInstanceIdW.Call(
+		uintptr(deviceSetInfo),
+		uintptr(unsafe.Pointer(devInfoData)),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&requiredSize)),
+	)
+	if r1 == 0 && !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
+		return "", err
+	}
+
+	friendlyNameBuf := make([]uint16, requiredSize)
+	r1, _, err = procSetupDiGetDeviceInstanceIdW.Call(
+		uintptr(deviceSetInfo),
+		uintptr(unsafe.Pointer(devInfoData)),
+		uintptr(unsafe.Pointer(&friendlyNameBuf[0])),
+		uintptr(requiredSize),
+		uintptr(unsafe.Pointer(&requiredSize)),
+	)
+	if r1 == 0 {
+		return "", err
+	}
+
+	return strings.Clone(windows.UTF16ToString(friendlyNameBuf)), nil
+}
+
 func setupDiGetDeviceInterfaceDetailW(
-	deviceInfoSet _HDEVINFO,
+	deviceInfoSet windows.Handle,
 	deviceInterfaceData *_SP_DEVICE_INTERFACE_DATA,
 ) (
 	deviceInterfaceDetailData *_SP_DEVICE_INTERFACE_DETAIL_DATA_W,
@@ -191,7 +224,7 @@ func setupDiGetDeviceInterfaceDetailW(
 ) {
 	var requiredSize uint32
 	r1, _, err := procSetupDiGetDeviceInterfaceDetailW.Call(
-		uintptr(unsafe.Pointer(deviceInfoSet)),
+		uintptr(deviceInfoSet),
 		uintptr(unsafe.Pointer(deviceInterfaceData)),
 		0,
 		0,
@@ -209,7 +242,7 @@ func setupDiGetDeviceInterfaceDetailW(
 	deviceInfoData.CbSize = uint32(unsafe.Sizeof(*deviceInfoData))
 
 	r1, _, err = procSetupDiGetDeviceInterfaceDetailW.Call(
-		uintptr(unsafe.Pointer(deviceInfoSet)),
+		uintptr(deviceInfoSet),
 		uintptr(unsafe.Pointer(deviceInterfaceData)),
 		uintptr(unsafe.Pointer(deviceInterfaceDetailData)),
 		uintptr(requiredSize),
@@ -224,7 +257,7 @@ func setupDiGetDeviceInterfaceDetailW(
 }
 
 func setupDiGetDevicePropertyW(
-	deviceInfoSet _HDEVINFO,
+	deviceInfoSet windows.Handle,
 	deviceInfoData *_SP_DEVINFO_DATA,
 	devPropKey *windows.DEVPROPKEY,
 ) (
@@ -234,7 +267,7 @@ func setupDiGetDevicePropertyW(
 ) {
 	var requiredSize uint32
 	r1, _, err := procSetupDiGetDevicePropertyW.Call(
-		uintptr(unsafe.Pointer(deviceInfoSet)),
+		uintptr(deviceInfoSet),
 		uintptr(unsafe.Pointer(deviceInfoData)),
 		uintptr(unsafe.Pointer(devPropKey)),
 		uintptr(unsafe.Pointer(&devPropType)),
@@ -253,7 +286,7 @@ func setupDiGetDevicePropertyW(
 	propertyBuffer = make([]byte, requiredSize)
 
 	r1, _, err = procSetupDiGetDevicePropertyW.Call(
-		uintptr(unsafe.Pointer(deviceInfoSet)),
+		uintptr(deviceInfoSet),
 		uintptr(unsafe.Pointer(deviceInfoData)),
 		uintptr(unsafe.Pointer(devPropKey)),
 		uintptr(unsafe.Pointer(&devPropType)),
@@ -266,8 +299,110 @@ func setupDiGetDevicePropertyW(
 		return 0, nil, err
 	}
 
-	return devPropType, propertyBuffer, nil
+	return devPropType, bytes.Clone(propertyBuffer), nil
 }
+
+func getDeviceInfo(devPath string) (*DeviceInfo, error) {
+	devicePathPtr := windows.StringToUTF16Ptr(devPath)
+
+	hFile, err := windows.CreateFile(
+		devicePathPtr,
+		0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OVERLAPPED,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = windows.Close(hFile)
+	}()
+
+	deviceInfo := &DeviceInfo{
+		Path: devPath,
+	}
+
+	attrs, err := getAttributes(hFile)
+	if err != nil {
+		return nil, err
+	}
+	deviceInfo.VendorID = attrs.VendorID
+	deviceInfo.ProductID = attrs.ProductID
+	deviceInfo.ReleaseNbr = attrs.VersionNumber
+
+	decoder := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder()
+
+	mfrStr, _ := getManufacturerString(hFile)
+	if len(mfrStr) > 0 {
+		deviceInfo.MfrStr, err = decoder.String(strings.TrimRight(string(mfrStr), string([]byte{0})) + "\u0000")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	productStr, _ := getProductString(hFile)
+	if len(mfrStr) > 0 {
+		deviceInfo.ProductStr, err = decoder.String(strings.TrimRight(string(productStr), string([]byte{0})) + "\u0000")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	serialNumberStr, _ := getSerialNumberString(hFile)
+	if len(serialNumberStr) > 0 {
+		deviceInfo.SerialNbr, err = decoder.String(strings.TrimRight(string(serialNumberStr), string([]byte{0})) + "\u0000")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := func() error {
+		preparsedData, err := getPreparsedData(hFile)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = freePreparsedData(preparsedData)
+		}()
+
+		caps, err := getCaps(preparsedData)
+		if err != nil {
+			return err
+		}
+		deviceInfo.UsagePage = caps.UsagePage
+		deviceInfo.Usage = caps.Usage
+
+		return nil
+	}(); err != nil {
+		return nil, err
+	}
+
+	return deviceInfo, nil
+}
+
+var (
+	devpkeyDeviceDevNodeStatus = windows.DEVPROPKEY{
+		FmtID: windows.DEVPROPGUID(windows.GUID{
+			Data1: 0x4340a6c5,
+			Data2: 0x93fa,
+			Data3: 0x4706,
+			Data4: [8]byte{0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7},
+		}),
+		PID: 2,
+	}
+	devpkeyDeviceParent = windows.DEVPROPKEY{
+		FmtID: windows.DEVPROPGUID(windows.GUID{
+			Data1: 0x4340a6c5,
+			Data2: 0x93fa,
+			Data3: 0x4706,
+			Data4: [8]byte{0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7},
+		}),
+		PID: 8,
+	}
+)
 
 func Enumerate() iter.Seq2[*DeviceInfo, error] {
 	return func(yield func(deviceInfo *DeviceInfo, err error) bool) {
@@ -312,15 +447,7 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 				return
 			}
 
-			propertyType, statusBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &windows.DEVPROPKEY{
-				FmtID: windows.DEVPROPGUID(windows.GUID{
-					Data1: 0x4340a6c5,
-					Data2: 0x93fa,
-					Data3: 0x4706,
-					Data4: [8]byte{0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7},
-				}),
-				PID: 2,
-			})
+			propertyType, statusBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &devpkeyDeviceDevNodeStatus)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -338,86 +465,31 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			}
 
 			devicePath := windows.UTF16PtrToString(&deviceInterfaceDetailData.DevicePath[0])
-			devicePathPtr := windows.StringToUTF16Ptr(devicePath)
-
-			hFile, err := windows.CreateFile(
-				devicePathPtr,
-				0,
-				windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
-				nil,
-				windows.OPEN_EXISTING,
-				windows.FILE_FLAG_OVERLAPPED,
-				0,
-			)
+			deviceInfo, err := getDeviceInfo(devicePath)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			deviceInfo.InterfaceNbr = int(interfaceMemberIndex)
 
-			deviceInfo := &DeviceInfo{
-				Path:         devicePath,
-				InterfaceNbr: int(interfaceMemberIndex),
-			}
-
-			attrs, err := getAttributes(hFile)
+			instanceID, err := setupDiGetDeviceInstanceIdW(deviceInfoSet, deviceInfoData)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			deviceInfo.VendorID = attrs.VendorID
-			deviceInfo.ProductID = attrs.ProductID
-			deviceInfo.ReleaseNbr = attrs.VersionNumber
+			deviceInfo.InstanceID = instanceID
 
-			decoder := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder()
-
-			mfrStr, _ := getManufacturerString(hFile)
-			if len(mfrStr) > 0 {
-				deviceInfo.MfrStr, err = decoder.String(strings.TrimRight(string(mfrStr), string([]byte{0})) + "\u0000")
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-			}
-
-			productStr, _ := getProductString(hFile)
-			if len(mfrStr) > 0 {
-				deviceInfo.ProductStr, err = decoder.String(strings.TrimRight(string(productStr), string([]byte{0})) + "\u0000")
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-			}
-
-			serialNumberStr, _ := getSerialNumberString(hFile)
-			if len(serialNumberStr) > 0 {
-				deviceInfo.SerialNbr, err = decoder.String(strings.TrimRight(string(serialNumberStr), string([]byte{0})) + "\u0000")
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-			}
-
-			if err := func() error {
-				preparsedData, err := getPreparsedData(hFile)
-				if err != nil {
-					return err
-				}
-				defer func() {
-					_ = freePreparsedData(preparsedData)
-				}()
-
-				caps, err := getCaps(preparsedData)
-				if err != nil {
-					return err
-				}
-				deviceInfo.UsagePage = caps.UsagePage
-				deviceInfo.Usage = caps.Usage
-
-				return nil
-			}(); err != nil {
+			propertyType, parentBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &devpkeyDeviceParent)
+			if err != nil {
 				yield(nil, err)
 				return
 			}
+			if propertyType != windows.DEVPROP_TYPE_STRING {
+				yield(nil, errors.New("string was expected"))
+				return
+			}
+			u16ParentBuf := unsafe.Slice((*uint16)(unsafe.Pointer(&parentBuf[0])), len(parentBuf)/2)
+			deviceInfo.ParentDeviceID = strings.Clone(windows.UTF16ToString(u16ParentBuf))
 
 			if !yield(deviceInfo, nil) {
 				return

@@ -15,7 +15,6 @@ type (
 	_GUID                              C.GUID
 	_TCHAR                             C.TCHAR
 	_SP_DEVICE_INTERFACE_DATA          C.SP_DEVICE_INTERFACE_DATA
-	_HDEVINFO                          C.HDEVINFO
 	_SP_DEVINFO_DATA                   C.SP_DEVINFO_DATA
 	_SP_DEVICE_INTERFACE_DETAIL_DATA_W C.SP_DEVICE_INTERFACE_DETAIL_DATA_W
 	_HIDD_ATTRIBUTES                   C.HIDD_ATTRIBUTES

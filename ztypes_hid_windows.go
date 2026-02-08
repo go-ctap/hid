@@ -17,7 +17,6 @@ type (
 		Flags              uint32
 		Reserved           uint64
 	}
-	_HDEVINFO        *byte
 	_SP_DEVINFO_DATA struct {
 		CbSize    uint32
 		ClassGuid _GUID
