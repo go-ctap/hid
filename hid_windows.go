@@ -581,7 +581,7 @@ func (d *Device) Read(p []byte) (n int, err error) {
 }
 
 func (d *Device) Write(p []byte) (n int, err error) {
-	buf := make([]byte, d.inputReportByteLength)
+	buf := make([]byte, d.outputReportByteLength)
 	copy(buf, p)
 
 	ol := new(windows.Overlapped)

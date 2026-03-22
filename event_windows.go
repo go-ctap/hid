@@ -43,6 +43,7 @@ var (
 	modCfgMgr32                  = windows.NewLazySystemDLL("CfgMgr32.dll")
 	procCMRegisterNotification   = modCfgMgr32.NewProc("CM_Register_Notification")
 	procCMUnregisterNotification = modCfgMgr32.NewProc("CM_Unregister_Notification")
+	cmCallback                   = syscall.NewCallback(cmNotificationCallback)
 
 	cmReceivers   sync.Map
 	cmReceiverSeq atomic.Uint64
@@ -53,6 +54,10 @@ func cmRegisterNotification(
 	pContext uintptr,
 	pCallback uintptr,
 ) (windows.Handle, error) {
+	if err := procCMRegisterNotification.Find(); err != nil {
+		return 0, fmt.Errorf("CM_Register_Notification failed: %w", err)
+	}
+
 	var pNotifyContext windows.Handle
 	r1, _, err := procCMRegisterNotification.Call(
 		uintptr(unsafe.Pointer(pFilter)),
@@ -71,6 +76,10 @@ func cmRegisterNotification(
 }
 
 func cmUnregisterNotification(pNotifyContext windows.Handle) error {
+	if err := procCMUnregisterNotification.Find(); err != nil {
+		return fmt.Errorf("CM_Unregister_Notification failed: %w", err)
+	}
+
 	r1, _, err := procCMUnregisterNotification.Call(uintptr(pNotifyContext))
 	if !errors.Is(windows.CONFIGRET(r1), windows.CR_SUCCESS) {
 		if !errors.Is(err, windows.ERROR_SUCCESS) {
@@ -158,6 +167,30 @@ func (er *cmEventReceiver) onAction(action _CM_NOTIFY_ACTION, data *_CM_NOTIFY_E
 	return 0
 }
 
+func cmNotificationCallback(
+	hNotify uintptr,
+	context uintptr,
+	action _CM_NOTIFY_ACTION,
+	eventData uintptr,
+	eventDataSize uintptr,
+) uintptr {
+	v, ok := cmReceivers.Load(context)
+	if !ok {
+		return 0
+	}
+
+	er, ok := v.(*cmEventReceiver)
+	if !ok {
+		return 0
+	}
+
+	return er.onAction(
+		action,
+		(*_CM_NOTIFY_EVENT_DATA)(unsafe.Pointer(eventData)),
+		eventDataSize,
+	)
+}
+
 func (er *cmEventReceiver) Listen() <-chan DeviceEvent {
 	return er.events
 }
@@ -194,31 +227,13 @@ func Events() (EventReceiver, error) {
 	receiver.cbID = cbID
 	cmReceivers.Store(cbID, receiver)
 
-	callback := syscall.NewCallback(func(hNotify uintptr, context uintptr, action _CM_NOTIFY_ACTION, eventData uintptr, eventDataSize uintptr) uintptr {
-		v, ok := cmReceivers.Load(context)
-		if !ok {
-			return 0
-		}
-
-		er, ok := v.(*cmEventReceiver)
-		if !ok {
-			return 0
-		}
-
-		return er.onAction(
-			action,
-			(*_CM_NOTIFY_EVENT_DATA)(unsafe.Pointer(eventData)),
-			eventDataSize,
-		)
-	})
-
 	filter := &_CM_NOTIFY_FILTER{
 		CbSize:     uint32(unsafe.Sizeof(_CM_NOTIFY_FILTER{})),
 		FilterType: _CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
 	}
 	*(*windows.GUID)(unsafe.Pointer(&filter.U[0])) = *hidGuid
 
-	notify, err := cmRegisterNotification(filter, cbID, callback)
+	notify, err := cmRegisterNotification(filter, cbID, cmCallback)
 	if err != nil {
 		cmReceivers.Delete(cbID)
 		return nil, err
