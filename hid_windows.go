@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -498,7 +499,22 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 	}
 }
 
-func OpenPath(path string) (*Device, error) {
+type Option func(*Device)
+
+func WithReadTimeout(timeout time.Duration) Option {
+	return func(device *Device) {
+		device.readTimeout = uint32(timeout.Milliseconds())
+	}
+}
+
+func OpenPath(path string, opts ...Option) (*Device, error) {
+	d := &Device{
+		readTimeout: windows.INFINITE,
+	}
+	for _, opt := range opts {
+		opt(d)
+	}
+
 	devicePathPtr := windows.StringToUTF16Ptr(path)
 
 	hFile, err := windows.CreateFile(
@@ -513,6 +529,7 @@ func OpenPath(path string) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	d.hFile = hFile
 
 	preparsedData, err := getPreparsedData(hFile)
 	if err != nil {
@@ -526,21 +543,19 @@ func OpenPath(path string) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	d.inputReportByteLength = caps.InputReportByteLength
+	d.outputReportByteLength = caps.OutputReportByteLength
+	d.featureReportByteLength = caps.FeatureReportByteLength
 
 	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
 	if err != nil {
 		return nil, err
 	}
+	d.overlapped = &windows.Overlapped{
+		HEvent: hEvent,
+	}
 
-	return &Device{
-		hFile: hFile,
-		overlapped: &windows.Overlapped{
-			HEvent: hEvent,
-		},
-		inputReportByteLength:   caps.InputReportByteLength,
-		outputReportByteLength:  caps.OutputReportByteLength,
-		featureReportByteLength: caps.FeatureReportByteLength,
-	}, nil
+	return d, nil
 }
 
 func (d *Device) Read(p []byte) (n int, err error) {
@@ -556,7 +571,7 @@ func (d *Device) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	event, err := windows.WaitForSingleObject(d.overlapped.HEvent, windows.INFINITE)
+	event, err := windows.WaitForSingleObject(d.overlapped.HEvent, d.readTimeout)
 	if err != nil {
 		return 0, err
 	}

@@ -8,4 +8,5 @@ type Device struct {
 	inputReportByteLength   uint16
 	outputReportByteLength  uint16
 	featureReportByteLength uint16
+	readTimeout             uint32
 }
