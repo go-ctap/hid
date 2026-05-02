@@ -547,39 +547,41 @@ func OpenPath(path string, opts ...Option) (*Device, error) {
 	d.outputReportByteLength = caps.OutputReportByteLength
 	d.featureReportByteLength = caps.FeatureReportByteLength
 
-	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	d.overlapped = &windows.Overlapped{
-		HEvent: hEvent,
-	}
-
 	return d, nil
 }
 
 func (d *Device) Read(p []byte) (n int, err error) {
-	if err := windows.ResetEvent(d.overlapped.HEvent); err != nil {
+	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
 		return 0, err
+	}
+	defer func() {
+		_ = windows.Close(hEvent)
+	}()
+
+	overlapped := &windows.Overlapped{
+		HEvent: hEvent,
 	}
 
 	buf := make([]byte, d.inputReportByteLength)
 	var done uint32
-	if err := windows.ReadFile(d.hFile, buf, &done, d.overlapped); err != nil {
+	if err := windows.ReadFile(d.hFile, buf, &done, overlapped); err != nil {
 		if !errors.Is(err, windows.ERROR_IO_PENDING) {
 			return 0, err
 		}
 	}
 
-	event, err := windows.WaitForSingleObject(d.overlapped.HEvent, d.readTimeout)
+	event, err := windows.WaitForSingleObject(overlapped.HEvent, d.readTimeout)
 	if err != nil {
 		return 0, err
 	}
 	if event != windows.WAIT_OBJECT_0 {
+		_ = windows.CancelIoEx(d.hFile, overlapped)
+		_ = windows.GetOverlappedResult(d.hFile, overlapped, &done, true)
 		return 0, fmt.Errorf("unexpected event: %d", event)
 	}
 
-	if err := windows.GetOverlappedResult(d.hFile, d.overlapped, &done, true); err != nil {
+	if err := windows.GetOverlappedResult(d.hFile, overlapped, &done, true); err != nil {
 		return 0, err
 	}
 
@@ -619,9 +621,15 @@ func (d *Device) Write(p []byte) (n int, err error) {
 }
 
 func (d *Device) Close() error {
-	if err := windows.Close(d.overlapped.HEvent); err != nil {
-		return err
-	}
+	d.closeOnce.Do(func() {
+		if err := windows.CancelIoEx(d.hFile, nil); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+			d.closeErr = err
+		}
 
-	return windows.Close(d.hFile)
+		if err := windows.Close(d.hFile); err != nil && d.closeErr == nil {
+			d.closeErr = err
+		}
+	})
+
+	return d.closeErr
 }
