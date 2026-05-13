@@ -4,22 +4,15 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
-	"unsafe"
-
-	"golang.org/x/sys/unix"
+	"strconv"
+	"strings"
 
 	"github.com/go-ctap/hid/reportparser"
 )
 
-func ioctlHIDGetDescSize(fd int) (size uint32, err error) {
-	_, _, e1 := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.HIDIOCGRDESCSIZE), uintptr(unsafe.Pointer(&size)))
-	if e1 != 0 {
-		err = e1
-	}
-	return
-}
+func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
+	opts := newEnumerateOptions(options)
 
-func Enumerate() iter.Seq2[*DeviceInfo, error] {
 	return func(yield func(*DeviceInfo, error) bool) {
 		dir, err := os.Open("/sys/class/hidraw")
 		if err != nil {
@@ -40,64 +33,91 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			info, err := func() (*DeviceInfo, error) {
 				path := filepath.Join("/dev", filepath.Base(name))
 				info := &DeviceInfo{Path: path}
+				sysfsDevicePath := filepath.Join("/sys/class/hidraw", name, "device")
 
-				dev, err := os.Open(info.Path)
+				// Parse usage page and usage from report descriptor
+				rawDescriptor, err := os.ReadFile(filepath.Join(sysfsDevicePath, "report_descriptor"))
 				if err != nil {
 					return nil, err
 				}
-				defer func() {
-					_ = dev.Close()
-				}()
+				fillDeviceInfoUsage(info, rawDescriptor)
 
-				fd := int(dev.Fd())
-
-				size, err := ioctlHIDGetDescSize(fd)
+				// Parse vendor ID, product ID, product name and serial number from uevent
+				uevent, err := os.ReadFile(filepath.Join(sysfsDevicePath, "uevent"))
 				if err != nil {
 					return nil, err
 				}
-
-				rawDescriptor := unix.HIDRawReportDescriptor{
-					Size: size,
-				}
-				if err := unix.IoctlHIDGetDesc(int(dev.Fd()), &rawDescriptor); err != nil {
+				if err := fillDeviceInfoFromUevent(info, uevent); err != nil {
 					return nil, err
 				}
 
-				for _, item := range reportparser.ParseReport(rawDescriptor.Value[:rawDescriptor.Size]) {
-					switch e := item.(type) {
-					case reportparser.UsagePage:
-						if info.UsagePage == 0 {
-							info.UsagePage = e.Value()
-						}
-					case reportparser.Usage:
-						if info.Usage == 0 {
-							info.Usage = e.Value()
-						}
-					}
+				if !opts.match(info) {
+					return nil, nil
 				}
-
-				rawInfo, err := unix.IoctlHIDGetRawInfo(int(dev.Fd()))
-				if err != nil {
-					return nil, err
-				}
-				info.VendorID = uint16(rawInfo.Vendor)
-				info.ProductID = uint16(rawInfo.Product)
-
-				productStr, err := unix.IoctlHIDGetRawName(int(dev.Fd()))
-				if err != nil {
-					return nil, err
-				}
-				info.ProductStr = productStr
 
 				return info, nil
 			}()
 			if err != nil {
-				yield(nil, err)
-				return
+				if !yield(nil, err) {
+					return
+				}
+				continue
 			}
 
-			if !yield(info, err) {
+			if info == nil {
+				continue
+			}
+
+			if !yield(info, nil) {
 				return
+			}
+		}
+	}
+}
+
+func fillDeviceInfoFromUevent(info *DeviceInfo, uevent []byte) error {
+	for _, line := range strings.Split(string(uevent), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		switch key {
+		case "HID_ID":
+			parts := strings.Split(value, ":")
+			if len(parts) != 3 {
+				continue
+			}
+			vendorID, err := strconv.ParseUint(parts[1], 16, 16)
+			if err != nil {
+				return err
+			}
+			productID, err := strconv.ParseUint(parts[2], 16, 16)
+			if err != nil {
+				return err
+			}
+			info.VendorID = uint16(vendorID)
+			info.ProductID = uint16(productID)
+		case "HID_NAME":
+			info.ProductStr = value
+		case "HID_UNIQ":
+			info.SerialNbr = value
+		}
+	}
+
+	return nil
+}
+
+func fillDeviceInfoUsage(info *DeviceInfo, rawDescriptor []byte) {
+	for _, item := range reportparser.ParseReport(rawDescriptor) {
+		switch e := item.(type) {
+		case reportparser.UsagePage:
+			if info.UsagePage == 0 {
+				info.UsagePage = e.Value()
+			}
+		case reportparser.Usage:
+			if info.Usage == 0 {
+				info.Usage = e.Value()
 			}
 		}
 	}

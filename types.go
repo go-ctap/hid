@@ -14,3 +14,38 @@ type DeviceInfo struct {
 	InstanceID     string
 	ParentDeviceID string
 }
+
+type DeviceInfoFilter func(*DeviceInfo) bool
+
+type EnumerateOption func(*enumerateOptions)
+
+type enumerateOptions struct {
+	filters []DeviceInfoFilter
+}
+
+func WithDeviceInfoFilter(filter DeviceInfoFilter) EnumerateOption {
+	return func(opts *enumerateOptions) {
+		if filter != nil {
+			opts.filters = append(opts.filters, filter)
+		}
+	}
+}
+
+func newEnumerateOptions(options []EnumerateOption) enumerateOptions {
+	var opts enumerateOptions
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	return opts
+}
+
+func (opts enumerateOptions) match(info *DeviceInfo) bool {
+	for _, filter := range opts.filters {
+		if !filter(info) {
+			return false
+		}
+	}
+	return true
+}

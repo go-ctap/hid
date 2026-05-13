@@ -3,6 +3,8 @@
 package hid
 
 import (
+	"errors"
+	"os"
 	"runtime"
 	"testing"
 
@@ -14,7 +16,9 @@ import (
 func TestCTAPHID(t *testing.T) {
 	var devInfos []*DeviceInfo
 
-	for devInfo, err := range Enumerate() {
+	for devInfo, err := range Enumerate(WithDeviceInfoFilter(func(info *DeviceInfo) bool {
+		return info.UsagePage == 0xf1d0 && info.Usage == 0x01
+	})) {
 		assert.NoError(t, err)
 		if err != nil {
 			continue
@@ -22,15 +26,14 @@ func TestCTAPHID(t *testing.T) {
 
 		godump.Dump(devInfo)
 
-		if devInfo.UsagePage != 0xf1d0 || devInfo.Usage != 0x01 {
-			continue
-		}
-
 		devInfos = append(devInfos, devInfo)
 	}
 
 	for _, devInfo := range devInfos {
 		device, err := OpenPath(devInfo.Path)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			continue
+		}
 		require.NoError(t, err)
 
 		n, err := device.Write([]byte{

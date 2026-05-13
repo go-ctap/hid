@@ -405,7 +405,9 @@ var (
 	}
 )
 
-func Enumerate() iter.Seq2[*DeviceInfo, error] {
+func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
+	opts := newEnumerateOptions(options)
+
 	return func(yield func(deviceInfo *DeviceInfo, err error) bool) {
 		guid, err := getHidGuid()
 		if err != nil {
@@ -491,6 +493,10 @@ func Enumerate() iter.Seq2[*DeviceInfo, error] {
 			}
 			u16ParentBuf := unsafe.Slice((*uint16)(unsafe.Pointer(&parentBuf[0])), len(parentBuf)/2)
 			deviceInfo.ParentDeviceID = strings.Clone(windows.UTF16ToString(u16ParentBuf))
+
+			if !opts.match(deviceInfo) {
+				continue
+			}
 
 			if !yield(deviceInfo, nil) {
 				return
