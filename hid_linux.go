@@ -123,10 +123,6 @@ func fillDeviceInfoUsage(info *DeviceInfo, rawDescriptor []byte) {
 	}
 }
 
-type Device struct {
-	file *os.File
-}
-
 func OpenPath(path string) (*Device, error) {
 	dev, err := os.OpenFile(path, os.O_RDWR, 0755)
 	if err != nil {
