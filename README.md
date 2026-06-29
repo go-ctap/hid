@@ -1,7 +1,7 @@
 # go-hid
 
 Working prototype to prove that you don't need `cgo` to work with HID devices.
-Currently, only Windows is supported.
+Currently, Windows, macOS and Linux are supported.
 
 Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
 
@@ -12,11 +12,11 @@ Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
   - [x] Open
     - [x] Read
     - [x] Write
-- [ ] macOS
-  - [ ] Enumerate
-  - [ ] Open
-      - [ ] Read
-      - [ ] Write
+- [x] macOS
+  - [x] Enumerate
+  - [x] Open
+      - [x] Read
+      - [x] Write
 - [x] Linux
   - [x] Enumerate
   - [x] Open

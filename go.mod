@@ -1,12 +1,13 @@
 module github.com/go-ctap/hid
 
-go 1.24
+go 1.25.0
 
 require (
-	github.com/goforj/godump v1.5.0
-	github.com/stretchr/testify v1.10.0
-	golang.org/x/sys v0.33.0
-	golang.org/x/text v0.26.0
+	github.com/ebitengine/purego v0.10.1
+	github.com/goforj/godump v1.9.1
+	github.com/stretchr/testify v1.11.1
+	golang.org/x/sys v0.46.0
+	golang.org/x/text v0.38.0
 )
 
 require (

@@ -1,4 +1,4 @@
-//go:build windows || linux
+//go:build windows || linux || darwin
 
 package hid
 
@@ -16,9 +16,10 @@ import (
 func TestCTAPHID(t *testing.T) {
 	var devInfos []*DeviceInfo
 
-	for devInfo, err := range Enumerate(WithDeviceInfoFilter(func(info *DeviceInfo) bool {
-		return info.UsagePage == 0xf1d0 && info.Usage == 0x01
-	})) {
+	for devInfo, err := range Enumerate(
+		WithUsagePage(0xf1d0),
+		WithUsage(0x01),
+	) {
 		assert.NoError(t, err)
 		if err != nil {
 			continue
@@ -35,6 +36,9 @@ func TestCTAPHID(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, device.Close())
+		}()
 
 		n, err := device.Write([]byte{
 			// ReportID
