@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -28,21 +30,25 @@ var (
 	cfSetGetCount             func(cfSetRef) cfIndex
 	cfSetGetValues            func(cfSetRef, uintptr)
 	cfRunLoopGetCurrent       func() uintptr
-	cfRunLoopRun              func()
+	cfRunLoopRunInMode        func(cfStringRef, float64, bool) int32
 	cfRunLoopStop             func(uintptr)
 
-	ioHIDManagerCreate                     func(cfAllocatorRef, ioOptionBits) ioHIDManagerRef
-	ioHIDManagerSetDeviceMatching          func(ioHIDManagerRef, cfDictionaryRef)
-	ioHIDManagerCopyDevices                func(ioHIDManagerRef) cfSetRef
-	ioHIDDeviceOpen                        func(ioHIDDeviceRef, ioOptionBits) ioReturn
-	ioHIDDeviceClose                       func(ioHIDDeviceRef, ioOptionBits) ioReturn
-	ioHIDDeviceGetProperty                 func(ioHIDDeviceRef, cfStringRef) cfTypeRef
-	ioHIDDeviceGetService                  func(ioHIDDeviceRef) ioServiceRef
-	ioHIDDeviceRegisterInputReportCallback func(ioHIDDeviceRef, uintptr, cfIndex, uintptr, uintptr)
-	ioHIDDeviceScheduleWithRunLoop         func(ioHIDDeviceRef, uintptr, cfStringRef)
-	ioHIDDeviceUnscheduleFromRunLoop       func(ioHIDDeviceRef, uintptr, cfStringRef)
-	ioHIDDeviceSetReport                   func(ioHIDDeviceRef, ioHIDReportType, cfIndex, uintptr, cfIndex) ioReturn
-	ioRegistryEntryGetRegistryEntryID      func(ioServiceRef, uintptr) ioReturn
+	ioHIDManagerCreate                         func(cfAllocatorRef, ioOptionBits) ioHIDManagerRef
+	ioHIDManagerSetDeviceMatching              func(ioHIDManagerRef, cfDictionaryRef)
+	ioHIDManagerCopyDevices                    func(ioHIDManagerRef) cfSetRef
+	ioHIDManagerRegisterDeviceMatchingCallback func(ioHIDManagerRef, uintptr, uintptr)
+	ioHIDManagerRegisterDeviceRemovalCallback  func(ioHIDManagerRef, uintptr, uintptr)
+	ioHIDManagerScheduleWithRunLoop            func(ioHIDManagerRef, uintptr, cfStringRef)
+	ioHIDManagerUnscheduleFromRunLoop          func(ioHIDManagerRef, uintptr, cfStringRef)
+	ioHIDDeviceOpen                            func(ioHIDDeviceRef, ioOptionBits) ioReturn
+	ioHIDDeviceClose                           func(ioHIDDeviceRef, ioOptionBits) ioReturn
+	ioHIDDeviceGetProperty                     func(ioHIDDeviceRef, cfStringRef) cfTypeRef
+	ioHIDDeviceGetService                      func(ioHIDDeviceRef) ioServiceRef
+	ioHIDDeviceRegisterInputReportCallback     func(ioHIDDeviceRef, uintptr, cfIndex, uintptr, uintptr)
+	ioHIDDeviceScheduleWithRunLoop             func(ioHIDDeviceRef, uintptr, cfStringRef)
+	ioHIDDeviceUnscheduleFromRunLoop           func(ioHIDDeviceRef, uintptr, cfStringRef)
+	ioHIDDeviceSetReport                       func(ioHIDDeviceRef, ioHIDReportType, cfIndex, uintptr, cfIndex) ioReturn
+	ioRegistryEntryGetRegistryEntryID          func(ioServiceRef, uintptr) ioReturn
 
 	cfRunLoopDefaultMode cfStringRef
 	cfDictionaryKeyCB    uintptr
@@ -78,12 +84,16 @@ func init() {
 	purego.RegisterLibFunc(&cfSetGetCount, coreFoundation, "CFSetGetCount")
 	purego.RegisterLibFunc(&cfSetGetValues, coreFoundation, "CFSetGetValues")
 	purego.RegisterLibFunc(&cfRunLoopGetCurrent, coreFoundation, "CFRunLoopGetCurrent")
-	purego.RegisterLibFunc(&cfRunLoopRun, coreFoundation, "CFRunLoopRun")
+	purego.RegisterLibFunc(&cfRunLoopRunInMode, coreFoundation, "CFRunLoopRunInMode")
 	purego.RegisterLibFunc(&cfRunLoopStop, coreFoundation, "CFRunLoopStop")
 
 	purego.RegisterLibFunc(&ioHIDManagerCreate, ioKit, "IOHIDManagerCreate")
 	purego.RegisterLibFunc(&ioHIDManagerSetDeviceMatching, ioKit, "IOHIDManagerSetDeviceMatching")
 	purego.RegisterLibFunc(&ioHIDManagerCopyDevices, ioKit, "IOHIDManagerCopyDevices")
+	purego.RegisterLibFunc(&ioHIDManagerRegisterDeviceMatchingCallback, ioKit, "IOHIDManagerRegisterDeviceMatchingCallback")
+	purego.RegisterLibFunc(&ioHIDManagerRegisterDeviceRemovalCallback, ioKit, "IOHIDManagerRegisterDeviceRemovalCallback")
+	purego.RegisterLibFunc(&ioHIDManagerScheduleWithRunLoop, ioKit, "IOHIDManagerScheduleWithRunLoop")
+	purego.RegisterLibFunc(&ioHIDManagerUnscheduleFromRunLoop, ioKit, "IOHIDManagerUnscheduleFromRunLoop")
 	purego.RegisterLibFunc(&ioHIDDeviceOpen, ioKit, "IOHIDDeviceOpen")
 	purego.RegisterLibFunc(&ioHIDDeviceClose, ioKit, "IOHIDDeviceClose")
 	purego.RegisterLibFunc(&ioHIDDeviceGetProperty, ioKit, "IOHIDDeviceGetProperty")
@@ -137,7 +147,7 @@ func OpenPath(path string) (*Device, error) {
 		}
 
 		if ret := ioHIDDeviceOpen(device, 0); ret != kIOReturnSuccess {
-			return false, fmt.Errorf("IOHIDDeviceOpen failed: 0x%x", int32(ret))
+			return false, ioReturnError("IOHIDDeviceOpen", ret)
 		}
 
 		d := &Device{
@@ -154,6 +164,8 @@ func OpenPath(path string) (*Device, error) {
 		if d.outputReportByteLength <= 0 {
 			d.outputReportByteLength = 64
 		}
+		d.inputReportBuffer = make([]byte, d.inputReportByteLength)
+		d.inputReportBufferPin.Pin(unsafe.SliceData(d.inputReportBuffer))
 
 		cbID := uintptr(deviceSeq.Add(1))
 		d.cbID = cbID
@@ -204,7 +216,7 @@ func (d *Device) Write(p []byte) (int, error) {
 		uintptr(unsafe.Pointer(unsafe.SliceData(report))),
 		cfIndex(len(report)),
 	); ret != kIOReturnSuccess {
-		return 0, fmt.Errorf("IOHIDDeviceSetReport failed: 0x%x", int32(ret))
+		return 0, ioReturnError("IOHIDDeviceSetReport", ret)
 	}
 
 	return len(p), nil
@@ -226,12 +238,17 @@ func (d *Device) Close() error {
 	unregisterDevice(d.cbID)
 	_ = ioHIDDeviceClose(d.device, 0)
 	cfRelease(cfTypeRef(d.device))
+	runtime.KeepAlive(d.inputReportBuffer)
+	d.inputReportBufferPin.Unpin()
 	return nil
 }
 
 func (d *Device) run() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	d.runLoop = cfRunLoopGetCurrent()
-	buf := make([]byte, d.inputReportByteLength)
+	buf := d.inputReportBuffer
 	ioHIDDeviceRegisterInputReportCallback(
 		d.device,
 		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
@@ -242,14 +259,36 @@ func (d *Device) run() {
 	ioHIDDeviceScheduleWithRunLoop(d.device, d.runLoop, cfRunLoopDefaultMode)
 	close(d.ready)
 
-	cfRunLoopRun()
+	for {
+		d.closeMu.Lock()
+		closed := d.closed
+		d.closeMu.Unlock()
+		if closed {
+			break
+		}
+
+		// A finite timeout also covers Close racing with the first run-loop call.
+		if cfRunLoopRunInMode(cfRunLoopDefaultMode, 1, false) == kCFRunLoopRunFinished {
+			break
+		}
+	}
 
 	ioHIDDeviceUnscheduleFromRunLoop(d.device, d.runLoop, cfRunLoopDefaultMode)
+	d.closeMu.Lock()
+	d.runLoop = 0
+	d.closeMu.Unlock()
 	close(d.reports)
 	close(d.stopped)
 }
 
-func inputReportCallback(context uintptr, result ioReturn, sender uintptr, reportType ioHIDReportType, reportID uint32, report uintptr, reportLength cfIndex) {
+func ioReturnError(operation string, result ioReturn) error {
+	if result == kIOReturnNotPermitted || result == kIOReturnNotPrivileged {
+		return fmt.Errorf("%w: %s failed: 0x%08x", os.ErrPermission, operation, uint32(result))
+	}
+	return fmt.Errorf("%s failed: 0x%08x", operation, uint32(result))
+}
+
+func inputReportCallback(context uintptr, result ioReturn, sender uintptr, reportType ioHIDReportType, reportID uint32, report unsafe.Pointer, reportLength cfIndex) {
 	if result != kIOReturnSuccess || reportLength <= 0 {
 		return
 	}
@@ -258,7 +297,7 @@ func inputReportCallback(context uintptr, result ioReturn, sender uintptr, repor
 		return
 	}
 
-	data := unsafe.Slice((*byte)(unsafe.Pointer(report)), int(reportLength))
+	data := unsafe.Slice((*byte)(report), int(reportLength))
 	if reportID == 0 && len(data) > 0 && data[0] == 0 {
 		data = data[1:]
 	}

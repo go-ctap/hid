@@ -3,11 +3,122 @@
 package hid
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestReconcileCMStartupEvents(t *testing.T) {
+	callbackErr := errors.New("metadata unavailable")
+	snapshot := []*DeviceInfo{
+		{Path: `\\?\HID#A`, ProductID: 1},
+		{Path: `\\?\hid#b`, ProductID: 2},
+		{Path: `\\?\hid#stale`, ProductID: 3},
+		// SetupAPI can occasionally expose the same interface with different
+		// path casing. The startup snapshot must still contain it only once.
+		{Path: `\\?\hid#a`, ProductID: 4},
+	}
+	changes := []DeviceEvent{
+		{
+			Type:       DeviceEventDisconnected,
+			DeviceInfo: &DeviceInfo{Path: `\\?\HID#STALE`},
+		},
+		{
+			Type:       DeviceEventConnected,
+			DeviceInfo: &DeviceInfo{Path: `\\?\hid#new`, ProductID: 5},
+			Err:        callbackErr,
+		},
+		{
+			Type:       DeviceEventDisconnected,
+			DeviceInfo: &DeviceInfo{Path: `\\?\HID#NEW`},
+		},
+		{
+			Type:       DeviceEventDisconnected,
+			DeviceInfo: &DeviceInfo{Path: `\\?\HID#B`},
+		},
+		{
+			Type:       DeviceEventConnected,
+			DeviceInfo: &DeviceInfo{Path: `\\?\hid#b`, ProductID: 6},
+			Err:        callbackErr,
+		},
+	}
+
+	events := reconcileCMStartupEvents(snapshot, changes)
+	if len(events) != 2 {
+		t.Fatalf("got %d startup events, want 2: %#v", len(events), events)
+	}
+
+	if got := events[0]; got.Type != DeviceEventConnected || got.DeviceInfo == nil ||
+		!strings.EqualFold(got.DeviceInfo.Path, `\\?\hid#a`) || got.DeviceInfo.ProductID != 4 {
+		t.Fatalf("first event = %#v, want the de-duplicated A snapshot entry", got)
+	}
+	if got := events[1]; got.Type != DeviceEventConnected || got.DeviceInfo == nil ||
+		!strings.EqualFold(got.DeviceInfo.Path, `\\?\hid#b`) || got.DeviceInfo.ProductID != 6 ||
+		!errors.Is(got.Err, callbackErr) {
+		t.Fatalf("second event = %#v, want the latest B callback", got)
+	}
+
+	for _, event := range events {
+		if event.DeviceInfo != nil && strings.EqualFold(event.DeviceInfo.Path, `\\?\hid#stale`) {
+			t.Fatalf("stale enumeration entry was resurrected: %#v", event)
+		}
+		if event.DeviceInfo != nil && strings.EqualFold(event.DeviceInfo.Path, `\\?\hid#new`) {
+			t.Fatalf("removed startup arrival was retained: %#v", event)
+		}
+	}
+}
+
+func TestCMRemovalUsesCachedDeviceInfo(t *testing.T) {
+	queue := newDeviceEventQueue()
+	defer queue.Close()
+
+	cached := &DeviceInfo{
+		Path:       `\\?\hid#token`,
+		VendorID:   0x1050,
+		ProductID:  0x0407,
+		UsagePage:  0xf1d0,
+		Usage:      1,
+		ProductStr: "Security Key",
+	}
+	receiver := &cmEventReceiver{
+		events: queue,
+		devices: map[string]*DeviceInfo{
+			cmDevicePathKey(cached.Path): cached,
+		},
+	}
+
+	receiver.onPathAction(_CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL, `\\?\HID#TOKEN`)
+	select {
+	case event := <-queue.Listen():
+		if event.Type != DeviceEventDisconnected {
+			t.Fatalf("event type = %q, want %q", event.Type, DeviceEventDisconnected)
+		}
+		if event.DeviceInfo == nil || event.DeviceInfo.UsagePage != 0xf1d0 ||
+			event.DeviceInfo.Usage != 1 || event.DeviceInfo.ProductStr != "Security Key" {
+			t.Fatalf("event info = %#v, want cached FIDO metadata", event.DeviceInfo)
+		}
+		if event.DeviceInfo == cached {
+			t.Fatal("event exposes the receiver's cached DeviceInfo pointer")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cached removal event")
+	}
+
+	// A repeated/unknown removal is still a native callback and must not be
+	// dropped; without cached metadata its callback path is the fallback.
+	receiver.onPathAction(_CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL, `\\?\HID#TOKEN`)
+	select {
+	case event := <-queue.Listen():
+		if event.DeviceInfo == nil || event.DeviceInfo.Path != `\\?\HID#TOKEN` ||
+			event.DeviceInfo.UsagePage != 0 || event.DeviceInfo.Usage != 0 {
+			t.Fatalf("fallback event info = %#v", event.DeviceInfo)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fallback removal event")
+	}
+}
 
 func assertEventReceiverLifecycle(t *testing.T, newReceiver func() (EventReceiver, error)) {
 	t.Helper()

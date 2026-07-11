@@ -14,6 +14,10 @@ import (
 )
 
 func TestCTAPHID(t *testing.T) {
+	if os.Getenv("HID_TEST_CTAPHID") != "1" {
+		t.Skip("set HID_TEST_CTAPHID=1 to run the hardware test")
+	}
+
 	var devInfos []*DeviceInfo
 
 	for devInfo, err := range Enumerate(

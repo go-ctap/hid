@@ -26,11 +26,21 @@ var (
 	procHidP_GetCaps                     = modHidsdi.NewProc("HidP_GetCaps")
 	modSetupapi                          = windows.NewLazySystemDLL("setupapi.dll")
 	procSetupDiGetClassDevsW             = modSetupapi.NewProc("SetupDiGetClassDevsW")
+	procSetupDiDestroyDeviceInfoList     = modSetupapi.NewProc("SetupDiDestroyDeviceInfoList")
 	procSetupDiEnumDeviceInterfaces      = modSetupapi.NewProc("SetupDiEnumDeviceInterfaces")
 	procSetupDiGetDeviceInstanceIdW      = modSetupapi.NewProc("SetupDiGetDeviceInstanceIdW")
 	procSetupDiGetDeviceInterfaceDetailW = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
 	procSetupDiGetDevicePropertyW        = modSetupapi.NewProc("SetupDiGetDevicePropertyW")
 )
+
+func setupDiDestroyDeviceInfoList(deviceInfoSet windows.Handle) error {
+	r1, _, err := procSetupDiDestroyDeviceInfoList.Call(uintptr(deviceInfoSet))
+	if r1 == 0 {
+		return err
+	}
+
+	return nil
+}
 
 func getHidGuid() (*windows.GUID, error) {
 	var hidGuid windows.GUID
@@ -345,7 +355,7 @@ func getDeviceInfo(devPath string) (*DeviceInfo, error) {
 	}
 
 	productStr, _ := getProductString(hFile)
-	if len(mfrStr) > 0 {
+	if len(productStr) > 0 {
 		deviceInfo.ProductStr, err = decoder.String(strings.TrimRight(string(productStr), string([]byte{0})) + "\u0000")
 		if err != nil {
 			return nil, err
@@ -425,6 +435,9 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 			yield(nil, err)
 			return
 		}
+		defer func() {
+			_ = setupDiDestroyDeviceInfoList(deviceInfoSet)
+		}()
 
 		for interfaceMemberIndex := uint32(0); ; interfaceMemberIndex++ {
 			deviceInterfaceData, err := setupDiEnumDeviceInterfaces(
@@ -535,7 +548,12 @@ func OpenPath(path string, opts ...Option) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.hFile = hFile
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = windows.Close(hFile)
+		}
+	}()
 
 	preparsedData, err := getPreparsedData(hFile)
 	if err != nil {
@@ -552,6 +570,8 @@ func OpenPath(path string, opts ...Option) (*Device, error) {
 	d.inputReportByteLength = caps.InputReportByteLength
 	d.outputReportByteLength = caps.OutputReportByteLength
 	d.featureReportByteLength = caps.FeatureReportByteLength
+	d.hFile = hFile
+	closeOnError = false
 
 	return d, nil
 }

@@ -3,6 +3,7 @@ package hid
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -113,11 +114,15 @@ func cmSymbolicLinkFromEventData(data *_CM_NOTIFY_EVENT_DATA, eventDataSize uint
 
 type cmEventReceiver struct {
 	notify windows.Handle
-	events chan DeviceEvent
+	events *deviceEventQueue
 
-	mu     sync.RWMutex
-	closed bool
-	once   sync.Once
+	mu            sync.Mutex
+	closed        bool
+	initializing  bool
+	startupEvents []DeviceEvent
+	devices       map[string]*DeviceInfo
+	once          sync.Once
+	closeErr      error
 
 	cbID uintptr
 }
@@ -134,12 +139,24 @@ func (er *cmEventReceiver) onAction(action _CM_NOTIFY_ACTION, data *_CM_NOTIFY_E
 	if path == "" {
 		return 0
 	}
+	return er.onPathAction(action, path)
+}
+
+func (er *cmEventReceiver) onPathAction(action _CM_NOTIFY_ACTION, path string) uintptr {
+	er.mu.Lock()
+	defer er.mu.Unlock()
+	if er.closed {
+		return 0
+	}
 
 	typ := DeviceEventConnected
 	devInfo := &DeviceInfo{Path: path}
 	var devErr error
 	if action == _CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL {
 		typ = DeviceEventDisconnected
+		if cached := er.devices[cmDevicePathKey(path)]; cached != nil {
+			devInfo = cloneCMDeviceInfo(cached)
+		}
 	} else {
 		info, err := getDeviceInfo(path)
 		if err == nil {
@@ -149,20 +166,24 @@ func (er *cmEventReceiver) onAction(action _CM_NOTIFY_ACTION, data *_CM_NOTIFY_E
 		}
 	}
 
-	er.mu.RLock()
-	defer er.mu.RUnlock()
-	if er.closed {
-		return 0
-	}
-
-	select {
-	case er.events <- DeviceEvent{
+	event := DeviceEvent{
 		Type:       typ,
 		DeviceInfo: devInfo,
 		Err:        devErr,
-	}:
-	default:
 	}
+	if er.initializing {
+		er.startupEvents = append(er.startupEvents, event)
+		return 0
+	}
+
+	key := cmDevicePathKey(path)
+	switch typ {
+	case DeviceEventConnected:
+		er.devices[key] = cloneCMDeviceInfo(devInfo)
+	case DeviceEventDisconnected:
+		delete(er.devices, key)
+	}
+	er.events.Send(event)
 
 	return 0
 }
@@ -171,7 +192,7 @@ func cmNotificationCallback(
 	hNotify uintptr,
 	context uintptr,
 	action _CM_NOTIFY_ACTION,
-	eventData uintptr,
+	eventData unsafe.Pointer,
 	eventDataSize uintptr,
 ) uintptr {
 	v, ok := cmReceivers.Load(context)
@@ -186,33 +207,112 @@ func cmNotificationCallback(
 
 	return er.onAction(
 		action,
-		(*_CM_NOTIFY_EVENT_DATA)(unsafe.Pointer(eventData)),
+		(*_CM_NOTIFY_EVENT_DATA)(eventData),
 		eventDataSize,
 	)
 }
 
 func (er *cmEventReceiver) Listen() <-chan DeviceEvent {
-	return er.events
+	return er.events.Listen()
 }
 
 func (er *cmEventReceiver) Close() error {
-	var unregisterErr error
-
 	er.once.Do(func() {
 		er.mu.Lock()
 		er.closed = true
-		close(er.events)
 		er.mu.Unlock()
 
 		if er.notify != 0 {
-			unregisterErr = cmUnregisterNotification(er.notify)
+			er.closeErr = cmUnregisterNotification(er.notify)
 		}
+		er.events.Close()
 		cmReceivers.Delete(er.cbID)
 	})
 
-	return unregisterErr
+	return er.closeErr
 }
 
+func cmDevicePathKey(path string) string {
+	return strings.ToLower(path)
+}
+
+func cloneCMDeviceInfo(info *DeviceInfo) *DeviceInfo {
+	if info == nil {
+		return nil
+	}
+	cloned := *info
+	return &cloned
+}
+
+// reconcileCMStartupEvents applies notifications received while Enumerate was
+// running over its result. Notifications win even when SetupAPI yields a stale
+// device after CM already reported its removal.
+func reconcileCMStartupEvents(snapshot []*DeviceInfo, changes []DeviceEvent) []DeviceEvent {
+	state := make(map[string]DeviceEvent, len(snapshot)+len(changes))
+	order := make([]string, 0, len(snapshot)+len(changes))
+	ordered := make(map[string]struct{}, len(snapshot)+len(changes))
+
+	put := func(event DeviceEvent) {
+		if event.DeviceInfo == nil || event.DeviceInfo.Path == "" {
+			return
+		}
+
+		key := cmDevicePathKey(event.DeviceInfo.Path)
+		if _, ok := ordered[key]; !ok {
+			ordered[key] = struct{}{}
+			order = append(order, key)
+		}
+		state[key] = event
+	}
+
+	for _, info := range snapshot {
+		put(DeviceEvent{
+			Type:       DeviceEventConnected,
+			DeviceInfo: info,
+		})
+	}
+
+	for _, event := range changes {
+		if event.DeviceInfo == nil || event.DeviceInfo.Path == "" {
+			continue
+		}
+
+		key := cmDevicePathKey(event.DeviceInfo.Path)
+		switch event.Type {
+		case DeviceEventConnected:
+			put(event)
+		case DeviceEventDisconnected:
+			delete(state, key)
+		}
+	}
+
+	events := make([]DeviceEvent, 0, len(state))
+	for _, key := range order {
+		if event, ok := state[key]; ok {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func (er *cmEventReceiver) publishStartup(snapshot []*DeviceInfo) {
+	er.mu.Lock()
+	defer er.mu.Unlock()
+	if er.closed {
+		return
+	}
+
+	events := reconcileCMStartupEvents(snapshot, er.startupEvents)
+	for _, event := range events {
+		er.devices[cmDevicePathKey(event.DeviceInfo.Path)] = cloneCMDeviceInfo(event.DeviceInfo)
+		er.events.Send(event)
+	}
+	er.startupEvents = nil
+	er.initializing = false
+}
+
+// Events publishes a connected event for every currently enumerated HID device,
+// followed by live connection and removal events.
 func Events() (EventReceiver, error) {
 	hidGuid, err := getHidGuid()
 	if err != nil {
@@ -220,7 +320,9 @@ func Events() (EventReceiver, error) {
 	}
 
 	receiver := &cmEventReceiver{
-		events: make(chan DeviceEvent, 10),
+		events:       newDeviceEventQueue(),
+		initializing: true,
+		devices:      make(map[string]*DeviceInfo),
 	}
 
 	cbID := uintptr(cmReceiverSeq.Add(1))
@@ -235,10 +337,26 @@ func Events() (EventReceiver, error) {
 
 	notify, err := cmRegisterNotification(filter, cbID, cmCallback)
 	if err != nil {
-		cmReceivers.Delete(cbID)
+		_ = receiver.Close()
 		return nil, err
 	}
 
 	receiver.notify = notify
+
+	var snapshot []*DeviceInfo
+	for info, enumerateErr := range Enumerate() {
+		if enumerateErr != nil {
+			closeErr := receiver.Close()
+			return nil, errors.Join(
+				fmt.Errorf("enumerate initial HID snapshot: %w", enumerateErr),
+				closeErr,
+			)
+		}
+		if info != nil {
+			snapshot = append(snapshot, info)
+		}
+	}
+	receiver.publishStartup(snapshot)
+
 	return receiver, nil
 }
