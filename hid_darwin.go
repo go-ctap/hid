@@ -197,17 +197,7 @@ func (d *Device) Read(p []byte) (int, error) {
 }
 
 func (d *Device) Write(p []byte) (int, error) {
-	reportID := cfIndex(0)
-	report := make([]byte, d.outputReportByteLength)
-	input := p
-	if len(input) > 0 {
-		reportID = cfIndex(input[0])
-		input = input[1:]
-	}
-	if len(input) > len(report) {
-		input = input[:len(report)]
-	}
-	copy(report, input)
+	reportID, report := prepareOutputReport(p, d.outputReportByteLength)
 
 	if ret := ioHIDDeviceSetReport(
 		d.device,
@@ -220,6 +210,25 @@ func (d *Device) Write(p []byte) (int, error) {
 	}
 
 	return len(p), nil
+}
+
+func prepareOutputReport(p []byte, reportByteLength int) (cfIndex, []byte) {
+	reportID := cfIndex(0)
+	report := make([]byte, reportByteLength)
+	input := p
+	if len(input) > 0 {
+		reportID = cfIndex(input[0])
+		if reportID == 0 {
+			// IOHID receives an unnumbered report without the synthetic leading zero.
+			input = input[1:]
+		}
+	}
+	if len(input) > len(report) {
+		input = input[:len(report)]
+	}
+	copy(report, input)
+
+	return reportID, report
 }
 
 func (d *Device) Close() error {
@@ -298,9 +307,6 @@ func inputReportCallback(context uintptr, result ioReturn, sender uintptr, repor
 	}
 
 	data := unsafe.Slice((*byte)(report), int(reportLength))
-	if reportID == 0 && len(data) > 0 && data[0] == 0 {
-		data = data[1:]
-	}
 	copied := bytes.Clone(data)
 
 	select {

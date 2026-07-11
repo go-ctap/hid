@@ -10,53 +10,59 @@ import (
 	"github.com/go-ctap/hid/reportparser"
 )
 
+const (
+	linuxHIDRawClassDir = "/sys/class/hidraw"
+	linuxDeviceDir      = "/dev"
+)
+
+func linuxHIDRawNames() ([]string, error) {
+	dir, err := os.Open(linuxHIDRawClassDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = dir.Close()
+	}()
+
+	return dir.Readdirnames(0)
+}
+
+func getLinuxDeviceInfo(name string) (*DeviceInfo, error) {
+	name = filepath.Base(name)
+	info := &DeviceInfo{Path: filepath.Join(linuxDeviceDir, name)}
+	sysfsDevicePath := filepath.Join(linuxHIDRawClassDir, name, "device")
+
+	// Parse usage page and usage from the report descriptor.
+	rawDescriptor, err := os.ReadFile(filepath.Join(sysfsDevicePath, "report_descriptor"))
+	if err != nil {
+		return info, err
+	}
+	fillDeviceInfoUsage(info, rawDescriptor)
+
+	// Parse vendor ID, product ID, product name and serial number from uevent.
+	uevent, err := os.ReadFile(filepath.Join(sysfsDevicePath, "uevent"))
+	if err != nil {
+		return info, err
+	}
+	if err := fillDeviceInfoFromUevent(info, uevent); err != nil {
+		return info, err
+	}
+
+	return info, nil
+}
+
 func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 	opts := newEnumerateOptions(options)
 
 	return func(yield func(*DeviceInfo, error) bool) {
-		dir, err := os.Open("/sys/class/hidraw")
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		defer func() {
-			_ = dir.Close()
-		}()
-
-		names, err := dir.Readdirnames(0)
+		names, err := linuxHIDRawNames()
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 
 		for _, name := range names {
-			info, err := func() (*DeviceInfo, error) {
-				path := filepath.Join("/dev", filepath.Base(name))
-				info := &DeviceInfo{Path: path}
-				sysfsDevicePath := filepath.Join("/sys/class/hidraw", name, "device")
-
-				// Parse usage page and usage from report descriptor
-				rawDescriptor, err := os.ReadFile(filepath.Join(sysfsDevicePath, "report_descriptor"))
-				if err != nil {
-					return nil, err
-				}
-				fillDeviceInfoUsage(info, rawDescriptor)
-
-				// Parse vendor ID, product ID, product name and serial number from uevent
-				uevent, err := os.ReadFile(filepath.Join(sysfsDevicePath, "uevent"))
-				if err != nil {
-					return nil, err
-				}
-				if err := fillDeviceInfoFromUevent(info, uevent); err != nil {
-					return nil, err
-				}
-
-				if !opts.match(info) {
-					return nil, nil
-				}
-
-				return info, nil
-			}()
+			info, err := getLinuxDeviceInfo(name)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -65,6 +71,9 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 			}
 
 			if info == nil {
+				continue
+			}
+			if !opts.match(info) {
 				continue
 			}
 

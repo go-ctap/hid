@@ -21,13 +21,14 @@ Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
       - [x] Write
 - [x] Linux
   - [x] Enumerate
+  - [x] Connect/disconnect events
   - [x] Open
      - [x] Read
      - [x] Write
 
 ## HID connection events
 
-`Events` is available on Windows and macOS. A new receiver first publishes a
+`Events` is available on Windows, macOS and Linux. A new receiver first publishes a
 `connected` event for every HID device that is already present, then continues
 with live `connected` and `disconnected` events. Events are ordered and queued
 until they are consumed or the receiver is closed.
@@ -65,3 +66,7 @@ On macOS the event receiver only enumerates devices and reads their properties;
 it does not open them and does not require administrator privileges. Opening a
 protected HID device for I/O is a separate operation and can still be denied by
 macOS policy or an application sandbox.
+
+On Linux the receiver listens to kernel `hidraw` uevents and does not open the
+device. A `connected` event can arrive before udev has created the corresponding
+`/dev/hidrawN` node or applied its final access permissions.
