@@ -12,6 +12,7 @@ type Device struct {
 	outputReportByteLength  uint16
 	featureReportByteLength uint16
 	readTimeout             uint32
+	openAccess              uint32
 	closeOnce               sync.Once
 	closeErr                error
 }

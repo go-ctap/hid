@@ -1,14 +1,56 @@
 package hid
 
 import (
+	"errors"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/go-ctap/hid/reportparser"
+	"golang.org/x/sys/unix"
 )
+
+func ioctlHIDGetFeature(fd int, report []byte) error {
+	_, _, e1 := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(hidIOCFeature(0x07, len(report))), uintptr(unsafe.Pointer(&report[0])))
+	if e1 != 0 {
+		return e1
+	}
+	return nil
+}
+
+func ioctlHIDSetFeature(fd int, report []byte) error {
+	_, _, e1 := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(hidIOCFeature(0x06, len(report))), uintptr(unsafe.Pointer(&report[0])))
+	if e1 != 0 {
+		return e1
+	}
+	return nil
+}
+
+func hidIOCFeature(nr int, size int) uintptr {
+	const (
+		iocNRBits   = 8
+		iocTypeBits = 8
+		iocSizeBits = 14
+		iocDirBits  = 2
+
+		iocNRShift   = 0
+		iocTypeShift = iocNRShift + iocNRBits
+		iocSizeShift = iocTypeShift + iocTypeBits
+		iocDirShift  = iocSizeShift + iocSizeBits
+
+		iocWrite = 1
+		iocRead  = 2
+	)
+
+	return uintptr((iocRead|iocWrite)<<iocDirShift |
+		('H' << iocTypeShift) |
+		(nr << iocNRShift) |
+		(size << iocSizeShift))
+}
 
 func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 	opts := newEnumerateOptions(options)
@@ -58,9 +100,6 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 				return info, nil
 			}()
 			if err != nil {
-				if !yield(nil, err) {
-					return
-				}
 				continue
 			}
 
@@ -144,6 +183,40 @@ func (d *Device) Read(b []byte) (int, error) {
 
 func (d *Device) Write(b []byte) (int, error) {
 	return d.file.Write(b)
+}
+
+func (d *Device) GetFeatureReport(p []byte) (int, error) {
+	if err := validateFeatureReportBuffer(p); err != nil {
+		return 0, err
+	}
+
+	if err := ioctlHIDGetFeature(int(d.file.Fd()), p); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+func (d *Device) SetFeatureReport(p []byte) (int, error) {
+	if err := validateFeatureReportBuffer(p); err != nil {
+		return 0, err
+	}
+
+	if err := ioctlHIDSetFeature(int(d.file.Fd()), p); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+func validateFeatureReportBuffer(p []byte) error {
+	if len(p) == 0 {
+		return errors.New("feature report buffer must include report ID")
+	}
+	if len(p) > 1<<14-1 {
+		return fmt.Errorf("feature report buffer is too large: %d", len(p))
+	}
+	return nil
 }
 
 func (d *Device) Close() error {

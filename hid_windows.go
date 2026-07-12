@@ -21,11 +21,14 @@ var (
 	procHidD_GetManufacturerString       = modHidsdi.NewProc("HidD_GetManufacturerString")
 	procHidD_GetProductString            = modHidsdi.NewProc("HidD_GetProductString")
 	procHidD_GetSerialNumberString       = modHidsdi.NewProc("HidD_GetSerialNumberString")
+	procHidD_GetFeature                  = modHidsdi.NewProc("HidD_GetFeature")
+	procHidD_SetFeature                  = modHidsdi.NewProc("HidD_SetFeature")
 	procHidD_GetPreparsedData            = modHidsdi.NewProc("HidD_GetPreparsedData")
 	procHidD_FreePreparsedData           = modHidsdi.NewProc("HidD_FreePreparsedData")
 	procHidP_GetCaps                     = modHidsdi.NewProc("HidP_GetCaps")
 	modSetupapi                          = windows.NewLazySystemDLL("setupapi.dll")
 	procSetupDiGetClassDevsW             = modSetupapi.NewProc("SetupDiGetClassDevsW")
+	procSetupDiDestroyDeviceInfoList     = modSetupapi.NewProc("SetupDiDestroyDeviceInfoList")
 	procSetupDiEnumDeviceInterfaces      = modSetupapi.NewProc("SetupDiEnumDeviceInterfaces")
 	procSetupDiGetDeviceInstanceIdW      = modSetupapi.NewProc("SetupDiGetDeviceInstanceIdW")
 	procSetupDiGetDeviceInterfaceDetailW = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
@@ -159,6 +162,15 @@ func setupDiGetClassDevs(
 	}
 
 	return windows.Handle(r1), nil
+}
+
+func setupDiDestroyDeviceInfoList(deviceInfoSet windows.Handle) error {
+	r1, _, err := procSetupDiDestroyDeviceInfoList.Call(uintptr(deviceInfoSet))
+	if r1 == 0 {
+		return err
+	}
+
+	return nil
 }
 
 func setupDiEnumDeviceInterfaces(
@@ -425,6 +437,9 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 			yield(nil, err)
 			return
 		}
+		defer func() {
+			_ = setupDiDestroyDeviceInfoList(deviceInfoSet)
+		}()
 
 		for interfaceMemberIndex := uint32(0); ; interfaceMemberIndex++ {
 			deviceInterfaceData, err := setupDiEnumDeviceInterfaces(
@@ -446,18 +461,15 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 				deviceInterfaceData,
 			)
 			if err != nil {
-				yield(nil, err)
-				return
+				continue
 			}
 
 			propertyType, statusBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &devpkeyDeviceDevNodeStatus)
 			if err != nil {
-				yield(nil, err)
-				return
+				continue
 			}
 			if propertyType != windows.DEVPROP_TYPE_UINT32 {
-				yield(nil, errors.New("uint32 was expected"))
-				return
+				continue
 			}
 
 			status := *(*uint32)(unsafe.Pointer(&statusBuf[0]))
@@ -470,26 +482,22 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 			devicePath := windows.UTF16PtrToString(&deviceInterfaceDetailData.DevicePath[0])
 			deviceInfo, err := getDeviceInfo(devicePath)
 			if err != nil {
-				yield(nil, err)
-				return
+				continue
 			}
 			deviceInfo.InterfaceNbr = int(interfaceMemberIndex)
 
 			instanceID, err := setupDiGetDeviceInstanceIdW(deviceInfoSet, deviceInfoData)
 			if err != nil {
-				yield(nil, err)
-				return
+				continue
 			}
 			deviceInfo.InstanceID = instanceID
 
 			propertyType, parentBuf, err := setupDiGetDevicePropertyW(deviceInfoSet, deviceInfoData, &devpkeyDeviceParent)
 			if err != nil {
-				yield(nil, err)
-				return
+				continue
 			}
 			if propertyType != windows.DEVPROP_TYPE_STRING {
-				yield(nil, errors.New("string was expected"))
-				return
+				continue
 			}
 			u16ParentBuf := unsafe.Slice((*uint16)(unsafe.Pointer(&parentBuf[0])), len(parentBuf)/2)
 			deviceInfo.ParentDeviceID = strings.Clone(windows.UTF16ToString(u16ParentBuf))
@@ -513,9 +521,16 @@ func WithReadTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithOpenAccess(access uint32) Option {
+	return func(device *Device) {
+		device.openAccess = access
+	}
+}
+
 func OpenPath(path string, opts ...Option) (*Device, error) {
 	d := &Device{
 		readTimeout: windows.INFINITE,
+		openAccess:  windows.GENERIC_WRITE | windows.GENERIC_READ,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -525,7 +540,7 @@ func OpenPath(path string, opts ...Option) (*Device, error) {
 
 	hFile, err := windows.CreateFile(
 		devicePathPtr,
-		windows.GENERIC_WRITE|windows.GENERIC_READ,
+		d.openAccess,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
 		windows.OPEN_EXISTING,
@@ -624,6 +639,61 @@ func (d *Device) Write(p []byte) (n int, err error) {
 	}
 
 	return len(buf), nil
+}
+
+func (d *Device) GetFeatureReport(p []byte) (int, error) {
+	buf, err := d.featureReportBuffer(p)
+	if err != nil {
+		return 0, err
+	}
+
+	r1, _, err := procHidD_GetFeature.Call(
+		uintptr(d.hFile),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
+		uintptr(len(buf)),
+	)
+	if r1 == 0 {
+		return 0, err
+	}
+
+	return copy(p, buf), nil
+}
+
+func (d *Device) SetFeatureReport(p []byte) (int, error) {
+	buf, err := d.featureReportBuffer(p)
+	if err != nil {
+		return 0, err
+	}
+
+	r1, _, err := procHidD_SetFeature.Call(
+		uintptr(d.hFile),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
+		uintptr(len(buf)),
+	)
+	if r1 == 0 {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+func (d *Device) featureReportBuffer(p []byte) ([]byte, error) {
+	if len(p) == 0 {
+		return nil, errors.New("feature report buffer must include report ID")
+	}
+
+	reportLength := int(d.featureReportByteLength)
+	if reportLength == 0 {
+		reportLength = len(p)
+	}
+	if len(p) > reportLength {
+		return nil, fmt.Errorf("feature report buffer is too large: %d > %d", len(p), d.featureReportByteLength)
+	}
+
+	buf := make([]byte, reportLength)
+	copy(buf, p)
+
+	return buf, nil
 }
 
 func (d *Device) Close() error {
