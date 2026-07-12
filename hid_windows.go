@@ -21,6 +21,8 @@ var (
 	procHidD_GetManufacturerString       = modHidsdi.NewProc("HidD_GetManufacturerString")
 	procHidD_GetProductString            = modHidsdi.NewProc("HidD_GetProductString")
 	procHidD_GetSerialNumberString       = modHidsdi.NewProc("HidD_GetSerialNumberString")
+	procHidD_GetFeature                  = modHidsdi.NewProc("HidD_GetFeature")
+	procHidD_SetFeature                  = modHidsdi.NewProc("HidD_SetFeature")
 	procHidD_GetPreparsedData            = modHidsdi.NewProc("HidD_GetPreparsedData")
 	procHidD_FreePreparsedData           = modHidsdi.NewProc("HidD_FreePreparsedData")
 	procHidP_GetCaps                     = modHidsdi.NewProc("HidP_GetCaps")
@@ -644,6 +646,38 @@ func (d *Device) Write(p []byte) (n int, err error) {
 	}
 
 	return len(buf), nil
+}
+
+func (d *Device) SendFeatureReport(report []byte) error {
+	buffer := make([]byte, d.featureReportByteLength)
+	copy(buffer, report)
+
+	r1, _, err := procHidD_SetFeature.Call(
+		uintptr(d.hFile),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
+		uintptr(len(buffer)),
+	)
+	if r1 == 0 {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Device) GetFeatureReport(report []byte) (int, error) {
+	buffer := make([]byte, d.featureReportByteLength)
+	buffer[0] = report[0]
+
+	r1, _, err := procHidD_GetFeature.Call(
+		uintptr(d.hFile),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
+		uintptr(len(buffer)),
+	)
+	if r1 == 0 {
+		return 0, err
+	}
+
+	return copy(report, buffer), nil
 }
 
 func (d *Device) Close() error {

@@ -13,6 +13,7 @@ const (
 	kIOHIDManagerOptionNone ioOptionBits    = 0x0
 	kIOHIDReportTypeInput   ioHIDReportType = 0
 	kIOHIDReportTypeOutput  ioHIDReportType = 1
+	kIOHIDReportTypeFeature ioHIDReportType = 2
 
 	kIOReturnSuccess       ioReturn = 0
 	kIOReturnNotPrivileged ioReturn = -536870207 // 0xe00002c1

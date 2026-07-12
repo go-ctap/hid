@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/go-ctap/hid/reportparser"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -149,6 +151,48 @@ func (d *Device) Read(b []byte) (int, error) {
 
 func (d *Device) Write(b []byte) (int, error) {
 	return d.file.Write(b)
+}
+
+func (d *Device) SendFeatureReport(report []byte) error {
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		d.file.Fd(),
+		hidIOCFeature(0x06, len(report)),
+		uintptr(unsafe.Pointer(unsafe.SliceData(report))),
+	)
+
+	if errno != 0 {
+		return errno
+	}
+
+	return nil
+}
+
+func (d *Device) GetFeatureReport(report []byte) (int, error) {
+	n, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		d.file.Fd(),
+		hidIOCFeature(0x07, len(report)),
+		uintptr(unsafe.Pointer(unsafe.SliceData(report))),
+	)
+
+	if errno != 0 {
+		return 0, errno
+	}
+
+	return int(n), nil
+}
+
+func hidIOCFeature(command, length int) uintptr {
+	const (
+		iocWrite uintptr = 1
+		iocRead  uintptr = 2
+	)
+
+	return (iocWrite|iocRead)<<30 |
+		uintptr(length)<<16 |
+		uintptr('H')<<8 |
+		uintptr(command)
 }
 
 func (d *Device) Close() error {

@@ -47,7 +47,8 @@ var (
 	ioHIDDeviceRegisterInputReportCallback     func(ioHIDDeviceRef, uintptr, cfIndex, uintptr, uintptr)
 	ioHIDDeviceScheduleWithRunLoop             func(ioHIDDeviceRef, uintptr, cfStringRef)
 	ioHIDDeviceUnscheduleFromRunLoop           func(ioHIDDeviceRef, uintptr, cfStringRef)
-	ioHIDDeviceSetReport                       func(ioHIDDeviceRef, ioHIDReportType, cfIndex, uintptr, cfIndex) ioReturn
+	ioHIDDeviceSetReport                       func(ioHIDDeviceRef, ioHIDReportType, cfIndex, []byte, cfIndex) ioReturn
+	ioHIDDeviceGetReport                       func(ioHIDDeviceRef, ioHIDReportType, cfIndex, []byte, *cfIndex) ioReturn
 	ioRegistryEntryGetRegistryEntryID          func(ioServiceRef, uintptr) ioReturn
 
 	cfRunLoopDefaultMode cfStringRef
@@ -102,6 +103,7 @@ func init() {
 	purego.RegisterLibFunc(&ioHIDDeviceScheduleWithRunLoop, ioKit, "IOHIDDeviceScheduleWithRunLoop")
 	purego.RegisterLibFunc(&ioHIDDeviceUnscheduleFromRunLoop, ioKit, "IOHIDDeviceUnscheduleFromRunLoop")
 	purego.RegisterLibFunc(&ioHIDDeviceSetReport, ioKit, "IOHIDDeviceSetReport")
+	purego.RegisterLibFunc(&ioHIDDeviceGetReport, ioKit, "IOHIDDeviceGetReport")
 	purego.RegisterLibFunc(&ioRegistryEntryGetRegistryEntryID, ioKit, "IORegistryEntryGetRegistryEntryID")
 
 	cfRunLoopDefaultMode = cfString(kCFRunLoopDefaultMode)
@@ -203,7 +205,7 @@ func (d *Device) Write(p []byte) (int, error) {
 		d.device,
 		kIOHIDReportTypeOutput,
 		reportID,
-		uintptr(unsafe.Pointer(unsafe.SliceData(report))),
+		report,
 		cfIndex(len(report)),
 	); ret != kIOReturnSuccess {
 		return 0, ioReturnError("IOHIDDeviceSetReport", ret)
@@ -212,17 +214,60 @@ func (d *Device) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func prepareOutputReport(p []byte, reportByteLength int) (cfIndex, []byte) {
+func (d *Device) SendFeatureReport(report []byte) error {
+	reportID, data := prepareIOHIDReport(report)
+
+	ret := ioHIDDeviceSetReport(
+		d.device,
+		kIOHIDReportTypeFeature,
+		reportID,
+		data,
+		cfIndex(len(data)),
+	)
+	if ret != kIOReturnSuccess {
+		return ioReturnError("IOHIDDeviceSetReport", ret)
+	}
+
+	return nil
+}
+
+func (d *Device) GetFeatureReport(report []byte) (int, error) {
+	reportID, data := prepareIOHIDReport(report)
+	length := cfIndex(len(data))
+
+	ret := ioHIDDeviceGetReport(
+		d.device,
+		kIOHIDReportTypeFeature,
+		reportID,
+		data,
+		&length,
+	)
+	if ret != kIOReturnSuccess {
+		return 0, ioReturnError("IOHIDDeviceGetReport", ret)
+	}
+
+	n := int(length)
+	if reportID == 0 {
+		n++
+	}
+	return n, nil
+}
+
+func prepareIOHIDReport(report []byte) (cfIndex, []byte) {
 	reportID := cfIndex(0)
-	report := make([]byte, reportByteLength)
-	input := p
-	if len(input) > 0 {
-		reportID = cfIndex(input[0])
+	if len(report) > 0 {
+		reportID = cfIndex(report[0])
 		if reportID == 0 {
 			// IOHID receives an unnumbered report without the synthetic leading zero.
-			input = input[1:]
+			report = report[1:]
 		}
 	}
+	return reportID, report
+}
+
+func prepareOutputReport(p []byte, reportByteLength int) (cfIndex, []byte) {
+	reportID, input := prepareIOHIDReport(p)
+	report := make([]byte, reportByteLength)
 	if len(input) > len(report) {
 		input = input[:len(report)]
 	}
