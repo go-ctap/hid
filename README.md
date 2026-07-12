@@ -1,37 +1,59 @@
-# go-hid
+# go-ctap/hid
 
-Working prototype to prove that you don't need `cgo` to work with HID devices.
-Currently, Windows, macOS and Linux are supported.
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-ctap/hid.svg)](https://pkg.go.dev/github.com/go-ctap/hid)
 
-Developed as part of [go-ctaphid](https://github.com/go-ctap/ctaphid).
+`go-ctap/hid` is a cgo-free Go library for discovering and communicating with HID devices on Windows, macOS, and Linux. It uses native operating-system facilities and requires neither `libhidapi` nor a C toolchain.
 
-## Status
+The library was created primarily as the HID backend for [`go-ctap/ctap`](https://github.com/go-ctap/ctap), but it is protocol-agnostic and can be used independently with other HID devices. The module is currently pre-v1, so its API may continue to evolve between minor releases.
 
-- [x] Windows
-  - [x] Enumerate
-  - [x] Connect/disconnect events
-  - [x] Open
-    - [x] Read
-    - [x] Write
-- [x] macOS
-  - [x] Enumerate
-  - [x] Connect/disconnect events
-  - [x] Open
-      - [x] Read
-      - [x] Write
-- [x] Linux
-  - [x] Enumerate
-  - [x] Connect/disconnect events
-  - [x] Open
-     - [x] Read
-     - [x] Write
+## Supported platforms
 
-## HID connection events
+| Capability | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Enumeration and filtering | Yes | Yes | Yes |
+| Connection events | Yes | Yes | Yes |
+| Input/output reports | Yes | Yes | Yes |
+| Feature reports | Yes | Yes | Yes |
+| Configurable read timeout | Yes | — | — |
+| Native backend | HID, SetupAPI, Configuration Manager | IOKit and Core Foundation via `purego` | `hidraw`, sysfs, and kernel uevents |
 
-`Events` is available on Windows, macOS and Linux. A new receiver first publishes a
-`connected` event for every HID device that is already present, then continues
-with live `connected` and `disconnected` events. Events are ordered and queued
-until they are consumed or the receiver is closed.
+## Installation
+
+The module requires Go 1.25 or newer.
+
+```sh
+go get github.com/go-ctap/hid
+```
+
+## Usage
+
+`Enumerate` returns a Go iterator. Filters are exact matches and can be combined; this example selects the FIDO HID usage collection used by `go-ctap`:
+
+```go
+for info, err := range hid.Enumerate(
+	hid.WithUsagePage(0xf1d0),
+	hid.WithUsage(0x01),
+) {
+	if err != nil {
+		log.Printf("enumerate HID: %v", err)
+		continue
+	}
+
+	log.Printf(
+		"path=%q vid=%04x pid=%04x product=%q",
+		info.Path,
+		info.VendorID,
+		info.ProductID,
+		info.ProductStr,
+	)
+}
+```
+
+Pass `DeviceInfo.Path` to `OpenPath` to get a device with `Read`, `Write`, `SendFeatureReport`, `GetFeatureReport`, and `Close`. Output and feature-report buffers begin with the report ID; use `0` for an unnumbered report. Higher-level framing, such as CTAPHID, is intentionally left to packages such as [`go-ctap/ctap`](https://github.com/go-ctap/ctap).
+
+## Connection events
+
+`Events` first publishes a `connected` event for every HID device already present, then continues with live `connected` and `disconnected` events.
 
 ```go
 receiver, err := hid.Events()
@@ -40,33 +62,34 @@ if err != nil {
 }
 defer receiver.Close()
 
-fidoDevices := make(map[string]*hid.DeviceInfo)
 for event := range receiver.Listen() {
-	if event.DeviceInfo == nil {
-		continue
+	if event.DeviceInfo != nil {
+		log.Printf("%s: %s", event.Type, event.DeviceInfo.Path)
 	}
-
-	switch event.Type {
-	case hid.DeviceEventConnected:
-		if event.DeviceInfo.UsagePage == 0xf1d0 && event.DeviceInfo.Usage == 1 {
-			fidoDevices[event.DeviceInfo.Path] = event.DeviceInfo
-		}
-	case hid.DeviceEventDisconnected:
-		delete(fidoDevices, event.DeviceInfo.Path)
-	}
-
-	// A non-nil Err means the state change happened, but some metadata may be partial.
 	if event.Err != nil {
 		log.Printf("HID event metadata: %v", event.Err)
 	}
 }
 ```
 
-On macOS the event receiver only enumerates devices and reads their properties;
-it does not open them and does not require administrator privileges. Opening a
-protected HID device for I/O is a separate operation and can still be denied by
-macOS policy or an application sandbox.
+Events cover all HID devices and should be filtered by the caller. Delivery is ordered and queued, so the channel should be consumed continuously or the receiver closed when it is no longer needed. A non-nil `DeviceEvent.Err` means that the state change occurred but some metadata may be incomplete.
 
-On Linux the receiver listens to kernel `hidraw` uevents and does not open the
-device. A `connected` event can arrive before udev has created the corresponding
-`/dev/hidrawN` node or applied its final access permissions.
+## Platform notes
+
+- Device paths are opaque and platform-specific. `DeviceInfo` metadata is best-effort, and fields unavailable on a platform remain empty or zero.
+- Enumeration and event monitoring do not guarantee I/O access; `OpenPath` remains subject to operating-system, driver, and sandbox policy.
+- Reads block by default. `WithReadTimeout` is available only in Windows builds; there is no cross-platform context or deadline API.
+- On macOS, enumeration and events do not open devices, but opening protected devices for I/O may still be denied by system or sandbox policy.
+- On Linux, access to `/dev/hidrawN` depends on udev rules and permissions. A connection event may arrive before the device node and its final permissions are ready.
+
+## Testing
+
+```sh
+go test ./...
+CGO_ENABLED=0 go test ./...
+go vet ./...
+```
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
