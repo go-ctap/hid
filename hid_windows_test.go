@@ -3,13 +3,19 @@ package hid
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/windows"
 )
 
 func TestGetHidGuid(t *testing.T) {
 	guid, err := getHidGuid()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	require.NotNil(t, guid)
-	require.NotEmpty(t, guid)
+	if guid == nil {
+		t.Fatal("getHidGuid returned nil")
+	}
+	if *guid == (windows.GUID{}) {
+		t.Fatal("getHidGuid returned an empty GUID")
+	}
 }

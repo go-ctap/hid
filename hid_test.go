@@ -6,11 +6,8 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"slices"
 	"testing"
-
-	"github.com/goforj/godump"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCTAPHID(t *testing.T) {
@@ -24,12 +21,12 @@ func TestCTAPHID(t *testing.T) {
 		WithUsagePage(0xf1d0),
 		WithUsage(0x01),
 	) {
-		assert.NoError(t, err)
 		if err != nil {
+			t.Error(err)
 			continue
 		}
 
-		godump.Dump(devInfo)
+		t.Logf("device info: %+v", devInfo)
 
 		devInfos = append(devInfos, devInfo)
 	}
@@ -39,9 +36,13 @@ func TestCTAPHID(t *testing.T) {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			continue
 		}
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer func() {
-			require.NoError(t, device.Close())
+			if err := device.Close(); err != nil {
+				t.Fatal(err)
+			}
 		}()
 
 		n, err := device.Write([]byte{
@@ -56,19 +57,29 @@ func TestCTAPHID(t *testing.T) {
 			// Nonce
 			0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 		})
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if runtime.GOOS == "windows" {
-			require.Equal(t, 65, n)
+			if n != 65 {
+				t.Fatalf("Write() = %d bytes, want 65", n)
+			}
 		} else {
-			require.Equal(t, 16, n)
+			if n != 16 {
+				t.Fatalf("Write() = %d bytes, want 16", n)
+			}
 		}
 
 		resp := make([]byte, 64)
 		n, err = device.Read(resp)
-		require.NoError(t, err)
-		require.Equal(t, 64, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 64 {
+			t.Fatalf("Read() = %d bytes, want 64", n)
+		}
 
-		require.Equal(t, []byte{
+		want := []byte{
 			// Broadcast CID
 			0xff, 0xff, 0xff, 0xff,
 			// CTAPHID_INIT | 0x80 (INIT PACKET BIT)
@@ -77,6 +88,9 @@ func TestCTAPHID(t *testing.T) {
 			0x00, 0x11,
 			// Nonce
 			0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-		}, resp[:15])
+		}
+		if !slices.Equal(resp[:15], want) {
+			t.Fatalf("response prefix = %x, want %x", resp[:15], want)
+		}
 	}
 }

@@ -3,10 +3,9 @@
 package hid
 
 import (
+	"slices"
 	"testing"
 	"unsafe"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestInputReportCallbackPreservesLeadingZero(t *testing.T) {
@@ -37,7 +36,9 @@ func TestInputReportCallbackPreservesLeadingZero(t *testing.T) {
 
 	select {
 	case received := <-device.reports:
-		require.Equal(t, report, received)
+		if !slices.Equal(received, report) {
+			t.Fatalf("received report = %v, want %v", received, report)
+		}
 	default:
 		t.Fatal("input report callback did not enqueue the report")
 	}
@@ -68,8 +69,12 @@ func TestDeviceWriteFormatsReportID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gotID, gotReport := prepareOutputReport(tt.input, len(tt.wantReport))
 
-			require.Equal(t, tt.wantID, gotID)
-			require.Equal(t, tt.wantReport, gotReport)
+			if gotID != tt.wantID {
+				t.Errorf("report ID = %d, want %d", gotID, tt.wantID)
+			}
+			if !slices.Equal(gotReport, tt.wantReport) {
+				t.Errorf("report = %v, want %v", gotReport, tt.wantReport)
+			}
 		})
 	}
 }
@@ -128,12 +133,24 @@ func TestDeviceSendFeatureReportFormatsReportID(t *testing.T) {
 			got = nativeCall{}
 			report := append([]byte(nil), tt.report...)
 
-			require.NoError(t, device.SendFeatureReport(report))
-			require.Equal(t, ioHIDDeviceRef(0x1234), got.device)
-			require.Equal(t, kIOHIDReportTypeFeature, got.reportType)
-			require.Equal(t, tt.wantID, got.reportID)
-			require.Equal(t, tt.wantData, got.data)
-			require.Equal(t, tt.wantLength, got.length)
+			if err := device.SendFeatureReport(report); err != nil {
+				t.Fatal(err)
+			}
+			if got.device != ioHIDDeviceRef(0x1234) {
+				t.Errorf("device = %#x, want %#x", got.device, ioHIDDeviceRef(0x1234))
+			}
+			if got.reportType != kIOHIDReportTypeFeature {
+				t.Errorf("report type = %d, want %d", got.reportType, kIOHIDReportTypeFeature)
+			}
+			if got.reportID != tt.wantID {
+				t.Errorf("report ID = %d, want %d", got.reportID, tt.wantID)
+			}
+			if !slices.Equal(got.data, tt.wantData) {
+				t.Errorf("data = %v, want %v", got.data, tt.wantData)
+			}
+			if got.length != tt.wantLength {
+				t.Errorf("length = %d, want %d", got.length, tt.wantLength)
+			}
 		})
 	}
 }
@@ -205,14 +222,30 @@ func TestDeviceGetFeatureReportFormatsReportID(t *testing.T) {
 			response = tt.response
 
 			n, err := device.GetFeatureReport(report)
-			require.NoError(t, err)
-			require.Equal(t, tt.wantN, n)
-			require.Equal(t, tt.wantReport, report)
-			require.Equal(t, ioHIDDeviceRef(0x1234), got.device)
-			require.Equal(t, kIOHIDReportTypeFeature, got.reportType)
-			require.Equal(t, tt.wantID, got.reportID)
-			require.Equal(t, int(tt.wantBufferLength), got.dataLength)
-			require.Equal(t, tt.wantBufferLength, got.bufferLength)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != tt.wantN {
+				t.Errorf("GetFeatureReport() = %d bytes, want %d", n, tt.wantN)
+			}
+			if !slices.Equal(report, tt.wantReport) {
+				t.Errorf("report = %v, want %v", report, tt.wantReport)
+			}
+			if got.device != ioHIDDeviceRef(0x1234) {
+				t.Errorf("device = %#x, want %#x", got.device, ioHIDDeviceRef(0x1234))
+			}
+			if got.reportType != kIOHIDReportTypeFeature {
+				t.Errorf("report type = %d, want %d", got.reportType, kIOHIDReportTypeFeature)
+			}
+			if got.reportID != tt.wantID {
+				t.Errorf("report ID = %d, want %d", got.reportID, tt.wantID)
+			}
+			if got.dataLength != int(tt.wantBufferLength) {
+				t.Errorf("data length = %d, want %d", got.dataLength, tt.wantBufferLength)
+			}
+			if got.bufferLength != tt.wantBufferLength {
+				t.Errorf("buffer length = %d, want %d", got.bufferLength, tt.wantBufferLength)
+			}
 		})
 	}
 }
