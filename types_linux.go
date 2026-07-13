@@ -1,7 +1,12 @@
 package hid
 
-import "os"
+import (
+	"os"
+	"sync"
+)
 
 type Device struct {
-	file *os.File
+	file    *os.File
+	readMu  sync.Mutex
+	writeMu sync.Mutex
 }

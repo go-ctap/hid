@@ -12,6 +12,8 @@ type Device struct {
 	outputReportByteLength  uint16
 	featureReportByteLength uint16
 	readTimeout             uint32
+	readMu                  sync.Mutex
+	writeMu                 sync.Mutex
 	closeOnce               sync.Once
 	closeErr                error
 }

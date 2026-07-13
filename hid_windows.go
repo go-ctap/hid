@@ -3,6 +3,7 @@ package hid
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -33,6 +34,13 @@ var (
 	procSetupDiGetDeviceInstanceIdW      = modSetupapi.NewProc("SetupDiGetDeviceInstanceIdW")
 	procSetupDiGetDeviceInterfaceDetailW = modSetupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
 	procSetupDiGetDevicePropertyW        = modSetupapi.NewProc("SetupDiGetDevicePropertyW")
+)
+
+var (
+	windowsReadFile            = windows.ReadFile
+	windowsWriteFile           = windows.WriteFile
+	windowsCancelIoEx          = windows.CancelIoEx
+	windowsGetOverlappedResult = windows.GetOverlappedResult
 )
 
 func setupDiDestroyDeviceInfoList(deviceInfoSet windows.Handle) error {
@@ -578,43 +586,72 @@ func OpenPath(path string, opts ...Option) (*Device, error) {
 	return d, nil
 }
 
-func (d *Device) Read(p []byte) (n int, err error) {
-	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
+func (d *Device) Read(ctx context.Context, p []byte) (n int, err error) {
+	d.readMu.Lock()
+
+	if err := ctx.Err(); err != nil {
+		d.readMu.Unlock()
+
 		return 0, err
 	}
-	defer func() {
-		_ = windows.Close(hEvent)
-	}()
+
+	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		d.readMu.Unlock()
+		return 0, err
+	}
 
 	overlapped := &windows.Overlapped{
 		HEvent: hEvent,
 	}
 
+	result := make(chan ioResult, 1)
+	go func() {
+		defer d.readMu.Unlock()
+		defer func() { _ = windows.Close(hEvent) }()
+		result <- d.read(overlapped)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = windowsCancelIoEx(d.hFile, overlapped)
+
+		return 0, ctx.Err()
+
+	case r := <-result:
+		if r.err != nil {
+			return 0, r.err
+		}
+
+		return copy(p, r.data), nil
+	}
+}
+
+func (d *Device) read(overlapped *windows.Overlapped) ioResult {
 	buf := make([]byte, d.inputReportByteLength)
 	var done uint32
-	if err := windows.ReadFile(d.hFile, buf, &done, overlapped); err != nil {
+	if err := windowsReadFile(d.hFile, buf, &done, overlapped); err != nil {
 		if !errors.Is(err, windows.ERROR_IO_PENDING) {
-			return 0, err
+			return ioResult{err: err}
 		}
 	}
 
 	event, err := windows.WaitForSingleObject(overlapped.HEvent, d.readTimeout)
 	if err != nil {
-		return 0, err
+		return ioResult{err: err}
 	}
 	if event != windows.WAIT_OBJECT_0 {
-		_ = windows.CancelIoEx(d.hFile, overlapped)
-		_ = windows.GetOverlappedResult(d.hFile, overlapped, &done, true)
-		return 0, fmt.Errorf("unexpected event: %d", event)
+		_ = windowsCancelIoEx(d.hFile, overlapped)
+		_ = windowsGetOverlappedResult(d.hFile, overlapped, &done, true)
+		return ioResult{err: fmt.Errorf("unexpected event: %d", event)}
 	}
 
-	if err := windows.GetOverlappedResult(d.hFile, overlapped, &done, true); err != nil {
-		return 0, err
+	if err := windowsGetOverlappedResult(d.hFile, overlapped, &done, true); err != nil {
+		return ioResult{err: err}
 	}
 
 	if done == 0 {
-		return 0, fmt.Errorf("no data received")
+		return ioResult{err: errors.New("no data received")}
 	}
 
 	// Remove report ID
@@ -622,30 +659,63 @@ func (d *Device) Read(p []byte) (n int, err error) {
 		buf = buf[1:]
 	}
 
-	return copy(p, buf), nil
+	return ioResult{n: len(buf), data: buf}
 }
 
-func (d *Device) Write(p []byte) (n int, err error) {
+func (d *Device) Write(ctx context.Context, p []byte) (n int, err error) {
 	buf := make([]byte, d.outputReportByteLength)
 	copy(buf, p)
 
-	ol := new(windows.Overlapped)
-	var done uint32
-	if err := windows.WriteFile(d.hFile, buf, &done, ol); err != nil {
-		if !errors.Is(err, windows.ERROR_IO_PENDING) {
-			return 0, err
-		}
-	}
+	d.writeMu.Lock()
 
-	if err := windows.GetOverlappedResult(d.hFile, ol, &done, true); err != nil {
+	if err := ctx.Err(); err != nil {
+		d.writeMu.Unlock()
+
 		return 0, err
 	}
 
-	if done != uint32(len(buf)) {
-		return 0, fmt.Errorf("expected %d bytes, got %d", len(buf), done)
+	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		d.writeMu.Unlock()
+		return 0, err
+	}
+	overlapped := &windows.Overlapped{HEvent: hEvent}
+
+	result := make(chan ioResult, 1)
+	go func() {
+		defer d.writeMu.Unlock()
+		defer func() { _ = windows.Close(hEvent) }()
+		result <- d.write(buf, overlapped)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = windowsCancelIoEx(d.hFile, overlapped)
+
+		return 0, ctx.Err()
+
+	case r := <-result:
+		return r.n, r.err
+	}
+}
+
+func (d *Device) write(buf []byte, overlapped *windows.Overlapped) ioResult {
+	var done uint32
+	if err := windowsWriteFile(d.hFile, buf, &done, overlapped); err != nil {
+		if !errors.Is(err, windows.ERROR_IO_PENDING) {
+			return ioResult{err: err}
+		}
 	}
 
-	return len(buf), nil
+	if err := windowsGetOverlappedResult(d.hFile, overlapped, &done, true); err != nil {
+		return ioResult{err: err}
+	}
+
+	if done != uint32(len(buf)) {
+		return ioResult{err: fmt.Errorf("expected %d bytes, got %d", len(buf), done)}
+	}
+
+	return ioResult{n: len(buf)}
 }
 
 func (d *Device) SendFeatureReport(report []byte) error {
@@ -682,7 +752,7 @@ func (d *Device) GetFeatureReport(report []byte) (int, error) {
 
 func (d *Device) Close() error {
 	d.closeOnce.Do(func() {
-		if err := windows.CancelIoEx(d.hFile, nil); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		if err := windowsCancelIoEx(d.hFile, nil); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
 			d.closeErr = err
 		}
 

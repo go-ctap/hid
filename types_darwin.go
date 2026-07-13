@@ -53,5 +53,6 @@ type Device struct {
 	runLoop uintptr
 	cbID    uintptr
 	closeMu sync.Mutex
+	writeMu sync.Mutex
 	closed  bool
 }

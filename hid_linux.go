@@ -1,6 +1,7 @@
 package hid
 
 import (
+	"context"
 	"iter"
 	"os"
 	"path/filepath"
@@ -145,12 +146,26 @@ func OpenPath(path string) (*Device, error) {
 	}, nil
 }
 
-func (d *Device) Read(b []byte) (int, error) {
-	return d.file.Read(b)
+func (d *Device) Read(ctx context.Context, b []byte) (int, error) {
+	result := runIO(ctx, &d.readMu, func() ioResult {
+		buf := make([]byte, len(b))
+		n, err := d.file.Read(buf)
+
+		return ioResult{n: n, data: buf[:n], err: err}
+	})
+
+	return copy(b, result.data), result.err
 }
 
-func (d *Device) Write(b []byte) (int, error) {
-	return d.file.Write(b)
+func (d *Device) Write(ctx context.Context, b []byte) (int, error) {
+	buf := append([]byte(nil), b...)
+	result := runIO(ctx, &d.writeMu, func() ioResult {
+		n, err := d.file.Write(buf)
+
+		return ioResult{n: n, err: err}
+	})
+
+	return result.n, result.err
 }
 
 func (d *Device) SendFeatureReport(report []byte) error {

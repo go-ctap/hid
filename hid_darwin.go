@@ -2,6 +2,7 @@ package hid
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -189,29 +190,43 @@ func OpenPath(path string) (*Device, error) {
 	return opened, nil
 }
 
-func (d *Device) Read(p []byte) (int, error) {
-	report, ok := <-d.reports
-	if !ok {
-		return 0, errors.New("device closed")
+func (d *Device) Read(ctx context.Context, p []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 
-	return copy(p, report), nil
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+
+	case report, ok := <-d.reports:
+		if !ok {
+			return 0, errors.New("device closed")
+		}
+
+		return copy(p, report), nil
+	}
 }
 
-func (d *Device) Write(p []byte) (int, error) {
+func (d *Device) Write(ctx context.Context, p []byte) (int, error) {
 	reportID, report := prepareOutputReport(p, d.outputReportByteLength)
+	inputLength := len(p)
 
-	if ret := ioHIDDeviceSetReport(
-		d.device,
-		kIOHIDReportTypeOutput,
-		reportID,
-		report,
-		cfIndex(len(report)),
-	); ret != kIOReturnSuccess {
-		return 0, ioReturnError("IOHIDDeviceSetReport", ret)
-	}
+	result := runIO(ctx, &d.writeMu, func() ioResult {
+		if ret := ioHIDDeviceSetReport(
+			d.device,
+			kIOHIDReportTypeOutput,
+			reportID,
+			report,
+			cfIndex(len(report)),
+		); ret != kIOReturnSuccess {
+			return ioResult{err: ioReturnError("IOHIDDeviceSetReport", ret)}
+		}
 
-	return len(p), nil
+		return ioResult{n: inputLength}
+	})
+
+	return result.n, result.err
 }
 
 func (d *Device) SendFeatureReport(report []byte) error {

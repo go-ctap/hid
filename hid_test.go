@@ -3,6 +3,7 @@
 package hid
 
 import (
+	"context"
 	"errors"
 	"os"
 	"runtime"
@@ -45,7 +46,7 @@ func TestCTAPHID(t *testing.T) {
 			}
 		}()
 
-		n, err := device.Write([]byte{
+		n, err := device.Write(context.Background(), []byte{
 			// ReportID
 			0x00,
 			// Broadcast CID
@@ -71,7 +72,7 @@ func TestCTAPHID(t *testing.T) {
 		}
 
 		resp := make([]byte, 64)
-		n, err = device.Read(resp)
+		n, err = device.Read(context.Background(), resp)
 		if err != nil {
 			t.Fatal(err)
 		}
