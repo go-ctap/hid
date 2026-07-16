@@ -1,6 +1,7 @@
 # go-ctap/hid
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-ctap/hid.svg)](https://pkg.go.dev/github.com/go-ctap/hid)
+[![Go](https://github.com/go-ctap/hid/actions/workflows/go.yml/badge.svg)](https://github.com/go-ctap/hid/actions/workflows/go.yml)
 
 `go-ctap/hid` is a cgo-free Go library for discovering and communicating with HID devices on Windows, macOS, and Linux. It uses native operating-system facilities and requires neither `libhidapi` nor a C toolchain.
 
