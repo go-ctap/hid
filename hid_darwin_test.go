@@ -3,7 +3,10 @@
 package hid
 
 import (
+	"context"
+	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 )
@@ -248,4 +251,108 @@ func TestDeviceGetFeatureReportFormatsReportID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeviceWriteWorker(t *testing.T) {
+	original := ioHIDDeviceSetReport
+	t.Cleanup(func() {
+		ioHIDDeviceSetReport = original
+	})
+
+	type nativeCall struct {
+		reportID cfIndex
+		data     []byte
+	}
+	calls := make(chan nativeCall, 2)
+	ioHIDDeviceSetReport = func(_ ioHIDDeviceRef, _ ioHIDReportType, reportID cfIndex, data []byte, _ cfIndex) ioReturn {
+		calls <- nativeCall{reportID: reportID, data: slices.Clone(data)}
+		return kIOReturnSuccess
+	}
+
+	device := newDarwinWriteTestDevice(t)
+	for _, report := range [][]byte{
+		{0, 1, 2, 3},
+		{5, 4, 3, 2},
+	} {
+		n, err := device.Write(context.Background(), report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(report) {
+			t.Fatalf("Write() = %d bytes, want %d", n, len(report))
+		}
+	}
+
+	first := <-calls
+	if first.reportID != 0 || !slices.Equal(first.data, []byte{1, 2, 3, 0}) {
+		t.Fatalf("first native call = id %d data %v", first.reportID, first.data)
+	}
+	second := <-calls
+	if second.reportID != 5 || !slices.Equal(second.data, []byte{5, 4, 3, 2}) {
+		t.Fatalf("second native call = id %d data %v", second.reportID, second.data)
+	}
+}
+
+func TestDeviceWriteCancellationLeavesWorkerUsable(t *testing.T) {
+	original := ioHIDDeviceSetReport
+	t.Cleanup(func() {
+		ioHIDDeviceSetReport = original
+	})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	ioHIDDeviceSetReport = func(_ ioHIDDeviceRef, _ ioHIDReportType, _ cfIndex, _ []byte, _ cfIndex) ioReturn {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return kIOReturnSuccess
+	}
+
+	device := newDarwinWriteTestDevice(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := device.Write(ctx, []byte{0, 1})
+		result <- err
+	}()
+
+	<-entered
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Write() error = %v, want context.Canceled", err)
+	}
+
+	close(release)
+	if _, err := device.Write(context.Background(), []byte{0, 2}); err != nil {
+		t.Fatalf("second Write(): %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("native calls = %d, want 2", got)
+	}
+}
+
+func newDarwinWriteTestDevice(t *testing.T) *Device {
+	t.Helper()
+
+	device := &Device{
+		device:                 0x1234,
+		outputReportByteLength: 4,
+		closing:                make(chan struct{}),
+		writes:                 make(chan darwinWriteRequest),
+		writeStopped:           make(chan struct{}),
+	}
+	go device.runWrites()
+
+	t.Cleanup(func() {
+		select {
+		case <-device.closing:
+		default:
+			close(device.closing)
+		}
+		<-device.writeStopped
+	})
+
+	return device
 }

@@ -62,6 +62,11 @@ var (
 	deviceSeq              atomic.Uint64
 )
 
+type darwinWriteRequest struct {
+	report []byte
+	result chan ioResult
+}
+
 func init() {
 	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
@@ -160,6 +165,9 @@ func OpenPath(path string) (*Device, error) {
 			reports:                make(chan []byte, 16),
 			ready:                  make(chan struct{}),
 			stopped:                make(chan struct{}),
+			closing:                make(chan struct{}),
+			writes:                 make(chan darwinWriteRequest),
+			writeStopped:           make(chan struct{}),
 		}
 		if d.inputReportByteLength <= 0 {
 			d.inputReportByteLength = 64
@@ -175,6 +183,7 @@ func OpenPath(path string) (*Device, error) {
 		registerDevice(cbID, d)
 
 		go d.run()
+		go d.runWrites()
 		<-d.ready
 
 		opened = d
@@ -209,24 +218,65 @@ func (d *Device) Read(ctx context.Context, p []byte) (int, error) {
 }
 
 func (d *Device) Write(ctx context.Context, p []byte) (int, error) {
-	reportID, report := prepareOutputReport(p, d.outputReportByteLength)
-	inputLength := len(p)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
-	result := runIO(ctx, &d.writeMu, func() ioResult {
-		if ret := ioHIDDeviceSetReport(
-			d.device,
-			kIOHIDReportTypeOutput,
-			reportID,
-			report,
-			cfIndex(len(report)),
-		); ret != kIOReturnSuccess {
-			return ioResult{err: ioReturnError("IOHIDDeviceSetReport", ret)}
+	request := darwinWriteRequest{
+		report: bytes.Clone(p),
+		result: make(chan ioResult, 1),
+	}
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-d.closing:
+		return 0, errors.New("device closed")
+	case d.writes <- request:
+	}
+
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-d.closing:
+		return 0, errors.New("device closed")
+	case result := <-request.result:
+		return result.n, result.err
+	}
+}
+
+func (d *Device) runWrites() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(d.writeStopped)
+
+	for {
+		select {
+		case <-d.closing:
+			return
+		case request := <-d.writes:
+			select {
+			case <-d.closing:
+				request.result <- ioResult{err: errors.New("device closed")}
+				return
+			default:
+			}
+
+			reportID, report := prepareOutputReport(request.report, d.outputReportByteLength)
+			ret := ioHIDDeviceSetReport(
+				d.device,
+				kIOHIDReportTypeOutput,
+				reportID,
+				report,
+				cfIndex(len(report)),
+			)
+			if ret != kIOReturnSuccess {
+				request.result <- ioResult{err: ioReturnError("IOHIDDeviceSetReport", ret)}
+				continue
+			}
+
+			request.result <- ioResult{n: len(request.report)}
 		}
-
-		return ioResult{n: inputLength}
-	})
-
-	return result.n, result.err
+	}
 }
 
 func (d *Device) SendFeatureReport(report []byte) error {
@@ -298,12 +348,14 @@ func (d *Device) Close() error {
 		return nil
 	}
 	d.closed = true
+	close(d.closing)
 	if d.runLoop != 0 {
 		cfRunLoopStop(d.runLoop)
 	}
 	d.closeMu.Unlock()
 
 	<-d.stopped
+	<-d.writeStopped
 	unregisterDevice(d.cbID)
 	_ = ioHIDDeviceClose(d.device, 0)
 	cfRelease(cfTypeRef(d.device))

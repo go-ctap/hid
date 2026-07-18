@@ -46,13 +46,15 @@ type Device struct {
 	inputReportBuffer      []byte
 	inputReportBufferPin   runtime.Pinner
 
-	reports chan []byte
-	ready   chan struct{}
-	stopped chan struct{}
+	reports      chan []byte
+	ready        chan struct{}
+	stopped      chan struct{}
+	closing      chan struct{}
+	writes       chan darwinWriteRequest
+	writeStopped chan struct{}
 
 	runLoop uintptr
 	cbID    uintptr
 	closeMu sync.Mutex
-	writeMu sync.Mutex
 	closed  bool
 }

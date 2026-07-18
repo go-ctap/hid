@@ -4,10 +4,12 @@ package hid
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -92,6 +94,51 @@ func TestCTAPHID(t *testing.T) {
 		}
 		if !slices.Equal(resp[:15], want) {
 			t.Fatalf("response prefix = %x, want %x", resp[:15], want)
+		}
+
+		pings := 0
+		if value := os.Getenv("HID_TEST_CTAPHID_PINGS"); value != "" {
+			pings, err = strconv.Atoi(value)
+			if err != nil || pings < 0 {
+				t.Fatalf("invalid HID_TEST_CTAPHID_PINGS value %q", value)
+			}
+		}
+
+		var channel [4]byte
+		copy(channel[:], resp[15:19])
+		for i := 0; i < pings; i++ {
+			payload := make([]byte, 8)
+			binary.BigEndian.PutUint64(payload, uint64(i))
+			request := []byte{
+				0,
+				channel[0], channel[1], channel[2], channel[3],
+				0x81,
+				0, byte(len(payload)),
+			}
+			request = append(request, payload...)
+
+			n, err = device.Write(context.Background(), request)
+			if err != nil {
+				t.Fatalf("ping %d write: %v", i, err)
+			}
+			if runtime.GOOS == "windows" {
+				if n != 65 {
+					t.Fatalf("ping %d Write() = %d bytes, want 65", i, n)
+				}
+			} else if n != len(request) {
+				t.Fatalf("ping %d Write() = %d bytes, want %d", i, n, len(request))
+			}
+
+			n, err = device.Read(context.Background(), resp)
+			if err != nil {
+				t.Fatalf("ping %d read: %v", i, err)
+			}
+			if n != 64 {
+				t.Fatalf("ping %d Read() = %d bytes, want 64", i, n)
+			}
+			if !slices.Equal(resp[:7], request[1:8]) || !slices.Equal(resp[7:15], payload) {
+				t.Fatalf("ping %d response = %x", i, resp[:15])
+			}
 		}
 	}
 }
