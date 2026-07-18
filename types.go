@@ -15,6 +15,12 @@ type DeviceInfo struct {
 	ParentDeviceID string
 }
 
+type ioResult struct {
+	n    int
+	data []byte
+	err  error
+}
+
 type EnumerateOption func(*enumerateOptions)
 
 type enumerateOptions struct {

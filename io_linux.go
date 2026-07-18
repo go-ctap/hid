@@ -1,15 +1,11 @@
+//go:build linux
+
 package hid
 
 import (
 	"context"
 	"sync"
 )
-
-type ioResult struct {
-	n    int
-	data []byte
-	err  error
-}
 
 // runIO serializes operations of one kind. The mutex remains held by the
 // operation goroutine when cancellation cannot stop the native call promptly.
