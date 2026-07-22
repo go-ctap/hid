@@ -265,7 +265,7 @@ func TestDeviceWriteWorker(t *testing.T) {
 	}
 	calls := make(chan nativeCall, 2)
 	ioHIDDeviceSetReport = func(_ ioHIDDeviceRef, _ ioHIDReportType, reportID cfIndex, data []byte, _ cfIndex) ioReturn {
-		calls <- nativeCall{reportID: reportID, data: slices.Clone(data)}
+		calls <- nativeCall{reportID: reportID, data: data}
 		return kIOReturnSuccess
 	}
 

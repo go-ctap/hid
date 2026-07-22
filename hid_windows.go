@@ -2,7 +2,6 @@
 package hid
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -127,7 +126,7 @@ func getProductString(hidDeviceObject windows.Handle) ([]byte, error) {
 		return nil, err
 	}
 
-	return bytes.Clone(buf), nil
+	return buf, nil
 }
 
 func getSerialNumberString(hidDeviceObject windows.Handle) ([]byte, error) {
@@ -141,7 +140,7 @@ func getSerialNumberString(hidDeviceObject windows.Handle) ([]byte, error) {
 		return nil, err
 	}
 
-	return bytes.Clone(buf), nil
+	return buf, nil
 }
 
 func getCaps(preparsedData _PHIDP_PREPARSED_DATA) (*_HIDP_CAPS, error) {
@@ -232,7 +231,7 @@ func setupDiGetDeviceInstanceIdW(
 		return "", err
 	}
 
-	return strings.Clone(windows.UTF16ToString(friendlyNameBuf)), nil
+	return windows.UTF16ToString(friendlyNameBuf), nil
 }
 
 func setupDiGetDeviceInterfaceDetailW(
@@ -320,7 +319,7 @@ func setupDiGetDevicePropertyW(
 		return 0, nil, err
 	}
 
-	return devPropType, bytes.Clone(propertyBuffer), nil
+	return devPropType, propertyBuffer, nil
 }
 
 func getDeviceInfo(devPath string) (*DeviceInfo, error) {
@@ -515,7 +514,7 @@ func Enumerate(options ...EnumerateOption) iter.Seq2[*DeviceInfo, error] {
 				return
 			}
 			u16ParentBuf := unsafe.Slice((*uint16)(unsafe.Pointer(&parentBuf[0])), len(parentBuf)/2)
-			deviceInfo.ParentDeviceID = strings.Clone(windows.UTF16ToString(u16ParentBuf))
+			deviceInfo.ParentDeviceID = windows.UTF16ToString(u16ParentBuf)
 
 			if !opts.match(deviceInfo) {
 				continue
