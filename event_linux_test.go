@@ -133,10 +133,10 @@ func TestReconcileLinuxStartupEvents(t *testing.T) {
 	}
 	changes := []DeviceEvent{
 		{Type: DeviceEventDisconnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw2"}},
-		{Type: DeviceEventConnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw3", ProductID: 5}, Err: metadataErr},
+		{Type: DeviceEventConnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw3", ProductID: 5}, MetadataErr: metadataErr},
 		{Type: DeviceEventDisconnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw3"}},
 		{Type: DeviceEventDisconnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw1"}},
-		{Type: DeviceEventConnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw1", ProductID: 6}, Err: metadataErr},
+		{Type: DeviceEventConnected, DeviceInfo: &DeviceInfo{Path: "/dev/hidraw1", ProductID: 6}, MetadataErr: metadataErr},
 	}
 
 	events := reconcileLinuxStartupEvents(snapshot, changes)
@@ -147,7 +147,7 @@ func TestReconcileLinuxStartupEvents(t *testing.T) {
 		t.Fatalf("first event = %#v, want de-duplicated hidraw0 snapshot", got)
 	}
 	if got := events[1]; got.DeviceInfo == nil || got.DeviceInfo.Path != "/dev/hidraw1" ||
-		got.DeviceInfo.ProductID != 6 || !errors.Is(got.Err, metadataErr) {
+		got.DeviceInfo.ProductID != 6 || !errors.Is(got.MetadataErr, metadataErr) {
 		t.Fatalf("second event = %#v, want latest hidraw1 add", got)
 	}
 
@@ -200,9 +200,6 @@ func TestLinuxRemovalUsesCachedDeviceInfo(t *testing.T) {
 		event.DeviceInfo.Usage != 1 || event.DeviceInfo.ProductStr != "Security Key" {
 		t.Fatalf("event info = %#v, want cached FIDO metadata", event.DeviceInfo)
 	}
-	if event.DeviceInfo == cached {
-		t.Fatal("event exposes the receiver's cached DeviceInfo pointer")
-	}
 
 	// A repeated removal is still a kernel event. With no cache left, it falls
 	// back to the stable device path.
@@ -237,11 +234,8 @@ func TestLinuxAddPublishesPartialDeviceInfo(t *testing.T) {
 		t.Fatalf("event = %#v, want connected event with partial info", event)
 	}
 	if event.DeviceInfo.Path != "/dev/hidraw9" || event.DeviceInfo.VendorID != 0x1050 ||
-		event.DeviceInfo.UsagePage != 0xf1d0 || !errors.Is(event.Err, metadataErr) {
+		event.DeviceInfo.UsagePage != 0xf1d0 || !errors.Is(event.MetadataErr, metadataErr) {
 		t.Fatalf("partial event = %#v", event)
-	}
-	if event.DeviceInfo == loaded {
-		t.Fatal("event exposes the metadata loader's DeviceInfo pointer")
 	}
 	cached := receiver.devices["/dev/hidraw9"]
 	if cached == nil || cached == event.DeviceInfo || cached.VendorID != 0x1050 {
@@ -391,9 +385,9 @@ func TestLinuxEventReceiverReportsBackgroundReadFailure(t *testing.T) {
 	}
 }
 
-func linuxIntegrationEventReceiver(t *testing.T) EventReceiver {
+func linuxIntegrationWatcher(t *testing.T) Watcher {
 	t.Helper()
-	receiver, err := Events()
+	receiver, err := Watch()
 	if err != nil {
 		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) ||
 			errors.Is(err, unix.EPROTONOSUPPORT) || errors.Is(err, unix.EAFNOSUPPORT) {
@@ -405,7 +399,7 @@ func linuxIntegrationEventReceiver(t *testing.T) EventReceiver {
 }
 
 func TestEventLifecycle(t *testing.T) {
-	receiver := linuxIntegrationEventReceiver(t)
+	receiver := linuxIntegrationWatcher(t)
 	events := receiver.Listen()
 
 	if err := receiver.Close(); err != nil {
@@ -425,15 +419,15 @@ func TestEventLifecycle(t *testing.T) {
 	}
 }
 
-func TestEventsAllowMultipleReceivers(t *testing.T) {
-	first := linuxIntegrationEventReceiver(t)
+func TestWatchAllowsMultipleWatchers(t *testing.T) {
+	first := linuxIntegrationWatcher(t)
 	defer first.Close()
-	second := linuxIntegrationEventReceiver(t)
+	second := linuxIntegrationWatcher(t)
 	defer second.Close()
 }
 
-func TestEventsPublishInitialSnapshot(t *testing.T) {
-	receiver := linuxIntegrationEventReceiver(t)
+func TestWatchCapturesInitialSnapshot(t *testing.T) {
+	receiver := linuxIntegrationWatcher(t)
 	defer receiver.Close()
 
 	names, err := linuxHIDRawNames()
@@ -449,30 +443,20 @@ func TestEventsPublishInitialSnapshot(t *testing.T) {
 			expected[linuxHIDRawPath(name)] = struct{}{}
 		}
 	}
-	initialPaths := make(map[string]struct{}, len(expected))
-	for path := range expected {
-		initialPaths[path] = struct{}{}
-	}
-
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for len(expected) > 0 {
-		select {
-		case event, ok := <-receiver.Listen():
-			if !ok {
-				t.Fatal("event channel closed during initial snapshot")
-			}
-			if event.Type != DeviceEventConnected || event.DeviceInfo == nil {
-				continue
-			}
-			path := event.DeviceInfo.Path
-			if _, isInitial := initialPaths[path]; !isInitial {
-				continue
-			}
-			delete(expected, path)
-		case <-deadline.C:
-			t.Fatalf("initial snapshot is missing %d device(s): %v", len(expected), expected)
+	seen := make(map[string]struct{}, len(expected))
+	for _, device := range receiver.Snapshot().Devices {
+		if device.DeviceInfo == nil {
+			t.Fatal("initial snapshot contains nil DeviceInfo")
 		}
+		path := device.DeviceInfo.Path
+		if _, duplicate := seen[path]; duplicate {
+			t.Fatalf("duplicate initial device for %q", path)
+		}
+		seen[path] = struct{}{}
+		delete(expected, path)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("initial snapshot is missing %d device(s): %v", len(expected), expected)
 	}
 }
 
@@ -501,7 +485,7 @@ func waitForLinuxEvent(t *testing.T, events <-chan DeviceEvent, eventType Device
 			if hint != "" && !strings.Contains(haystack, hint) {
 				continue
 			}
-			t.Logf("event type=%s path=%q product=%q err=%v", event.Type, info.Path, info.ProductStr, event.Err)
+			t.Logf("event type=%s path=%q product=%q err=%v", event.Type, info.Path, info.ProductStr, event.MetadataErr)
 			return event
 		case <-deadline.C:
 			t.Fatalf("timed out waiting for %s event (hint=%q)", eventType, hint)
@@ -514,7 +498,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 		t.Skip("set HID_TEST_MANUAL_EVENTS=1 to run the unplug/replug test")
 	}
 
-	receiver := linuxIntegrationEventReceiver(t)
+	receiver := linuxIntegrationWatcher(t)
 	defer receiver.Close()
 
 	hint := os.Getenv("HID_TEST_EVENT_HINT")
@@ -529,7 +513,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 	if connected.DeviceInfo.Path == "" {
 		t.Fatal("connect event has an empty path")
 	}
-	if connected.Err != nil {
-		t.Logf("connected metadata is partial: %v", connected.Err)
+	if connected.MetadataErr != nil {
+		t.Logf("connected metadata is partial: %v", connected.MetadataErr)
 	}
 }

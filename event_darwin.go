@@ -25,10 +25,12 @@ type darwinEventReceiver struct {
 	ready   chan error
 	stopped chan struct{}
 
-	mu      sync.Mutex
-	closed  bool
-	runLoop uintptr
-	devices map[ioHIDDeviceRef]*DeviceInfo
+	mu           sync.Mutex
+	closed       bool
+	runLoop      uintptr
+	devices      map[ioHIDDeviceRef]*DeviceInfo
+	snapshot     Snapshot
+	initializing bool
 
 	closeOnce sync.Once
 	cbID      uintptr
@@ -36,6 +38,10 @@ type darwinEventReceiver struct {
 
 func (er *darwinEventReceiver) Listen() <-chan DeviceEvent {
 	return er.events.Listen()
+}
+
+func (er *darwinEventReceiver) Snapshot() Snapshot {
+	return er.snapshot
 }
 
 func (er *darwinEventReceiver) Close() error {
@@ -82,6 +88,10 @@ func (er *darwinEventReceiver) run() {
 	ioHIDManagerScheduleWithRunLoop(manager, runLoop, cfRunLoopDefaultMode)
 	er.publishCurrentDevices(manager)
 
+	er.mu.Lock()
+	er.initializing = false
+	er.mu.Unlock()
+
 	er.ready <- nil
 	for {
 		er.mu.Lock()
@@ -108,7 +118,7 @@ func (er *darwinEventReceiver) run() {
 	er.mu.Unlock()
 }
 
-// publishCurrentDevices explicitly queues the initial snapshot before Events
+// publishCurrentDevices explicitly captures the initial snapshot before Watch
 // returns. The matching callbacks delivered by the run loop are deduplicated by
 // deviceConnected, while changes after this copy remain queued as live callbacks.
 func (er *darwinEventReceiver) publishCurrentDevices(manager ioHIDManagerRef) {
@@ -148,13 +158,21 @@ func (er *darwinEventReceiver) deviceConnected(result ioReturn, device ioHIDDevi
 		er.mu.Unlock()
 		return
 	}
-	er.devices[device] = cloneDeviceInfo(info)
+	er.devices[device] = info
+	if er.initializing {
+		er.snapshot.Devices = append(er.snapshot.Devices, DeviceSnapshot{
+			DeviceInfo:  info,
+			MetadataErr: eventErr,
+		})
+		er.mu.Unlock()
+		return
+	}
 	er.mu.Unlock()
 
 	er.events.Send(DeviceEvent{
-		Type:       DeviceEventConnected,
-		DeviceInfo: cloneDeviceInfo(info),
-		Err:        eventErr,
+		Type:        DeviceEventConnected,
+		DeviceInfo:  info,
+		MetadataErr: eventErr,
 	})
 }
 
@@ -177,9 +195,9 @@ func (er *darwinEventReceiver) deviceDisconnected(result ioReturn, device ioHIDD
 	}
 
 	er.events.Send(DeviceEvent{
-		Type:       DeviceEventDisconnected,
-		DeviceInfo: cloneDeviceInfo(info),
-		Err:        errors.Join(callbackResultError("IOHIDManager device removal", result), infoErr),
+		Type:        DeviceEventDisconnected,
+		DeviceInfo:  info,
+		MetadataErr: errors.Join(callbackResultError("IOHIDManager device removal", result), infoErr),
 	})
 }
 
@@ -188,14 +206,6 @@ func callbackResultError(operation string, result ioReturn) error {
 		return nil
 	}
 	return fmt.Errorf("%s callback failed: 0x%08x", operation, uint32(result))
-}
-
-func cloneDeviceInfo(info *DeviceInfo) *DeviceInfo {
-	if info == nil {
-		return nil
-	}
-	cloned := *info
-	return &cloned
 }
 
 func darwinDeviceMatchingCallback(context uintptr, result ioReturn, _ uintptr, device ioHIDDeviceRef) {
@@ -222,14 +232,15 @@ func darwinDeviceRemovalCallback(context uintptr, result ioReturn, _ uintptr, de
 	receiver.deviceDisconnected(result, device)
 }
 
-// Events publishes a connected event for every currently enumerated HID device,
-// followed by live connection and removal events.
-func Events() (EventReceiver, error) {
+// Watch captures the current HID snapshot and then publishes later connection
+// and removal events.
+func Watch() (Watcher, error) {
 	receiver := &darwinEventReceiver{
-		events:  newDeviceEventQueue(),
-		ready:   make(chan error, 1),
-		stopped: make(chan struct{}),
-		devices: make(map[ioHIDDeviceRef]*DeviceInfo),
+		events:       newDeviceEventQueue(),
+		ready:        make(chan error, 1),
+		stopped:      make(chan struct{}),
+		devices:      make(map[ioHIDDeviceRef]*DeviceInfo),
+		initializing: true,
 	}
 
 	receiver.cbID = uintptr(darwinEventSeq.Add(1))

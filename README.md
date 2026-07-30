@@ -71,26 +71,36 @@ After a canceled write, do not assume that the report was not sent and do not au
 
 ## Connection events
 
-`Events` first publishes a `connected` event for every HID device already present, then continues with live `connected` and `disconnected` events.
+`Watch` captures every HID device already present in an initial snapshot, then publishes live `connected` and `disconnected` events.
 
 ```go
-receiver, err := hid.Events()
+watcher, err := hid.Watch()
 if err != nil {
 	log.Fatal(err)
 }
-defer receiver.Close()
+defer watcher.Close()
 
-for event := range receiver.Listen() {
+for _, device := range watcher.Snapshot().Devices {
+	if device.DeviceInfo != nil {
+		log.Printf("present: %s", device.DeviceInfo.Path)
+	}
+}
+
+for event := range watcher.Listen() {
 	if event.DeviceInfo != nil {
 		log.Printf("%s: %s", event.Type, event.DeviceInfo.Path)
 	}
-	if event.Err != nil {
-		log.Printf("HID event metadata: %v", event.Err)
+	if event.MetadataErr != nil {
+		log.Printf("HID event metadata: %v", event.MetadataErr)
 	}
+}
+
+if err := watcher.Close(); err != nil {
+	log.Printf("HID watcher stopped: %v", err)
 }
 ```
 
-Events cover all HID devices and should be filtered by the caller. Delivery is ordered and queued, so the channel should be consumed continuously or the receiver closed when it is no longer needed. A non-nil `DeviceEvent.Err` means that the state change occurred but some metadata may be incomplete.
+Watch covers all HID devices and should be filtered by the caller. Delivery is ordered and queued, so the channel should be consumed continuously or the watcher closed when it is no longer needed. A non-nil `DeviceEvent.MetadataErr` means that the state change occurred but some metadata may be incomplete. When `Listen` closes unexpectedly, call `Close` to retrieve the terminal watcher error.
 
 ## Platform notes
 

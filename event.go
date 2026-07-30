@@ -3,9 +3,9 @@ package hid
 import "sync"
 
 type DeviceEvent struct {
-	Type       DeviceEventType
-	DeviceInfo *DeviceInfo
-	Err        error
+	Type        DeviceEventType
+	DeviceInfo  *DeviceInfo
+	MetadataErr error
 }
 
 type DeviceEventType string
@@ -15,7 +15,21 @@ const (
 	DeviceEventDisconnected DeviceEventType = "disconnected"
 )
 
-type EventReceiver interface {
+// DeviceSnapshot describes one device in a Watcher's initial snapshot.
+// MetadataErr means that the device is present but some metadata is incomplete.
+type DeviceSnapshot struct {
+	DeviceInfo  *DeviceInfo
+	MetadataErr error
+}
+
+// Snapshot is the initial device state captured by Watch.
+type Snapshot struct {
+	Devices []DeviceSnapshot
+}
+
+// Watcher publishes changes which happen after Snapshot.
+type Watcher interface {
+	Snapshot() Snapshot
 	Listen() <-chan DeviceEvent
 	Close() error
 }

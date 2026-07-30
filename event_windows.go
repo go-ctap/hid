@@ -121,6 +121,7 @@ type cmEventReceiver struct {
 	initializing  bool
 	startupEvents []DeviceEvent
 	devices       map[string]*DeviceInfo
+	snapshot      Snapshot
 	once          sync.Once
 	closeErr      error
 
@@ -155,7 +156,7 @@ func (er *cmEventReceiver) onPathAction(action _CM_NOTIFY_ACTION, path string) u
 	if action == _CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL {
 		typ = DeviceEventDisconnected
 		if cached := er.devices[cmDevicePathKey(path)]; cached != nil {
-			devInfo = cloneCMDeviceInfo(cached)
+			devInfo = cached
 		}
 	} else {
 		info, err := getDeviceInfo(path)
@@ -167,9 +168,9 @@ func (er *cmEventReceiver) onPathAction(action _CM_NOTIFY_ACTION, path string) u
 	}
 
 	event := DeviceEvent{
-		Type:       typ,
-		DeviceInfo: devInfo,
-		Err:        devErr,
+		Type:        typ,
+		DeviceInfo:  devInfo,
+		MetadataErr: devErr,
 	}
 	if er.initializing {
 		er.startupEvents = append(er.startupEvents, event)
@@ -179,7 +180,7 @@ func (er *cmEventReceiver) onPathAction(action _CM_NOTIFY_ACTION, path string) u
 	key := cmDevicePathKey(path)
 	switch typ {
 	case DeviceEventConnected:
-		er.devices[key] = cloneCMDeviceInfo(devInfo)
+		er.devices[key] = devInfo
 	case DeviceEventDisconnected:
 		delete(er.devices, key)
 	}
@@ -216,6 +217,10 @@ func (er *cmEventReceiver) Listen() <-chan DeviceEvent {
 	return er.events.Listen()
 }
 
+func (er *cmEventReceiver) Snapshot() Snapshot {
+	return er.snapshot
+}
+
 func (er *cmEventReceiver) Close() error {
 	er.once.Do(func() {
 		er.mu.Lock()
@@ -234,14 +239,6 @@ func (er *cmEventReceiver) Close() error {
 
 func cmDevicePathKey(path string) string {
 	return strings.ToLower(path)
-}
-
-func cloneCMDeviceInfo(info *DeviceInfo) *DeviceInfo {
-	if info == nil {
-		return nil
-	}
-	cloned := *info
-	return &cloned
 }
 
 // reconcileCMStartupEvents applies notifications received while Enumerate was
@@ -304,16 +301,19 @@ func (er *cmEventReceiver) publishStartup(snapshot []*DeviceInfo) {
 
 	events := reconcileCMStartupEvents(snapshot, er.startupEvents)
 	for _, event := range events {
-		er.devices[cmDevicePathKey(event.DeviceInfo.Path)] = cloneCMDeviceInfo(event.DeviceInfo)
-		er.events.Send(event)
+		er.devices[cmDevicePathKey(event.DeviceInfo.Path)] = event.DeviceInfo
+		er.snapshot.Devices = append(er.snapshot.Devices, DeviceSnapshot{
+			DeviceInfo:  event.DeviceInfo,
+			MetadataErr: event.MetadataErr,
+		})
 	}
 	er.startupEvents = nil
 	er.initializing = false
 }
 
-// Events publishes a connected event for every currently enumerated HID device,
-// followed by live connection and removal events.
-func Events() (EventReceiver, error) {
+// Watch captures the current HID snapshot and then publishes later connection
+// and removal events.
+func Watch() (Watcher, error) {
 	hidGuid, err := getHidGuid()
 	if err != nil {
 		return nil, err

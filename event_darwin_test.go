@@ -16,7 +16,7 @@ func TestIOReturnPermissionError(t *testing.T) {
 }
 
 func TestEventLifecycle(t *testing.T) {
-	receiver, err := Events()
+	receiver, err := Watch()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,15 +39,13 @@ func TestEventLifecycle(t *testing.T) {
 	}
 }
 
-func TestEventsPublishInitialSnapshot(t *testing.T) {
-	receiver, err := Events()
+func TestWatchCapturesInitialSnapshot(t *testing.T) {
+	receiver, err := Watch()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer receiver.Close()
 
-	// Subscribe first so a device changing while Enumerate runs is still
-	// represented in the callback stream.
 	expected := make(map[string]struct{})
 	for info, err := range Enumerate() {
 		if err != nil {
@@ -55,35 +53,20 @@ func TestEventsPublishInitialSnapshot(t *testing.T) {
 		}
 		expected[info.Path] = struct{}{}
 	}
-	initialPaths := make(map[string]struct{}, len(expected))
-	for path := range expected {
-		initialPaths[path] = struct{}{}
-	}
 	seen := make(map[string]struct{}, len(expected))
-
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for len(expected) > 0 {
-		select {
-		case event, ok := <-receiver.Listen():
-			if !ok {
-				t.Fatal("event channel closed during initial snapshot")
-			}
-			if event.Type != DeviceEventConnected || event.DeviceInfo == nil {
-				continue
-			}
-			path := event.DeviceInfo.Path
-			if _, isInitial := initialPaths[path]; !isInitial {
-				continue
-			}
-			if _, duplicate := seen[path]; duplicate {
-				t.Fatalf("duplicate initial connected event for %q", path)
-			}
-			seen[path] = struct{}{}
-			delete(expected, path)
-		case <-deadline.C:
-			t.Fatalf("initial snapshot is missing %d device(s): %v", len(expected), expected)
+	for _, device := range receiver.Snapshot().Devices {
+		if device.DeviceInfo == nil {
+			t.Fatal("initial snapshot contains nil DeviceInfo")
 		}
+		path := device.DeviceInfo.Path
+		if _, duplicate := seen[path]; duplicate {
+			t.Fatalf("duplicate initial device for %q", path)
+		}
+		seen[path] = struct{}{}
+		delete(expected, path)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("initial snapshot is missing %d device(s): %v", len(expected), expected)
 	}
 }
 
@@ -110,8 +93,8 @@ func TestEventRemovalUsesCachedDeviceInfo(t *testing.T) {
 		if event.Type != DeviceEventDisconnected {
 			t.Fatalf("event type = %q", event.Type)
 		}
-		if event.Err != nil {
-			t.Fatalf("event error = %v", event.Err)
+		if event.MetadataErr != nil {
+			t.Fatalf("event error = %v", event.MetadataErr)
 		}
 		if event.DeviceInfo == nil || event.DeviceInfo.Path != "cached-path" || event.DeviceInfo.UsagePage != 0xf1d0 {
 			t.Fatalf("event info = %#v", event.DeviceInfo)
@@ -146,7 +129,7 @@ func waitForDarwinEvent(t *testing.T, events <-chan DeviceEvent, eventType Devic
 			if hint != "" && !strings.Contains(haystack, hint) {
 				continue
 			}
-			t.Logf("event type=%s path=%q product=%q err=%v", event.Type, info.Path, info.ProductStr, event.Err)
+			t.Logf("event type=%s path=%q product=%q err=%v", event.Type, info.Path, info.ProductStr, event.MetadataErr)
 			return event
 		case <-deadline.C:
 			t.Fatalf("timed out waiting for %s event (hint=%q)", eventType, hint)
@@ -159,7 +142,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 		t.Skip("set HID_TEST_MANUAL_EVENTS=1 to run the unplug/replug test")
 	}
 
-	receiver, err := Events()
+	receiver, err := Watch()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +160,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 	if connected.DeviceInfo.Path == "" {
 		t.Fatal("connect event has an empty path")
 	}
-	if connected.Err != nil {
-		t.Logf("connected metadata is partial: %v", connected.Err)
+	if connected.MetadataErr != nil {
+		t.Logf("connected metadata is partial: %v", connected.MetadataErr)
 	}
 }

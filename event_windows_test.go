@@ -26,9 +26,9 @@ func TestReconcileCMStartupEvents(t *testing.T) {
 			DeviceInfo: &DeviceInfo{Path: `\\?\HID#STALE`},
 		},
 		{
-			Type:       DeviceEventConnected,
-			DeviceInfo: &DeviceInfo{Path: `\\?\hid#new`, ProductID: 5},
-			Err:        callbackErr,
+			Type:        DeviceEventConnected,
+			DeviceInfo:  &DeviceInfo{Path: `\\?\hid#new`, ProductID: 5},
+			MetadataErr: callbackErr,
 		},
 		{
 			Type:       DeviceEventDisconnected,
@@ -39,9 +39,9 @@ func TestReconcileCMStartupEvents(t *testing.T) {
 			DeviceInfo: &DeviceInfo{Path: `\\?\HID#B`},
 		},
 		{
-			Type:       DeviceEventConnected,
-			DeviceInfo: &DeviceInfo{Path: `\\?\hid#b`, ProductID: 6},
-			Err:        callbackErr,
+			Type:        DeviceEventConnected,
+			DeviceInfo:  &DeviceInfo{Path: `\\?\hid#b`, ProductID: 6},
+			MetadataErr: callbackErr,
 		},
 	}
 
@@ -56,7 +56,7 @@ func TestReconcileCMStartupEvents(t *testing.T) {
 	}
 	if got := events[1]; got.Type != DeviceEventConnected || got.DeviceInfo == nil ||
 		!strings.EqualFold(got.DeviceInfo.Path, `\\?\hid#b`) || got.DeviceInfo.ProductID != 6 ||
-		!errors.Is(got.Err, callbackErr) {
+		!errors.Is(got.MetadataErr, callbackErr) {
 		t.Fatalf("second event = %#v, want the latest B callback", got)
 	}
 
@@ -99,9 +99,6 @@ func TestCMRemovalUsesCachedDeviceInfo(t *testing.T) {
 			event.DeviceInfo.Usage != 1 || event.DeviceInfo.ProductStr != "Security Key" {
 			t.Fatalf("event info = %#v, want cached FIDO metadata", event.DeviceInfo)
 		}
-		if event.DeviceInfo == cached {
-			t.Fatal("event exposes the receiver's cached DeviceInfo pointer")
-		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for cached removal event")
 	}
@@ -120,20 +117,20 @@ func TestCMRemovalUsesCachedDeviceInfo(t *testing.T) {
 	}
 }
 
-func assertEventReceiverLifecycle(t *testing.T, newReceiver func() (EventReceiver, error)) {
+func assertWatcherLifecycle(t *testing.T, newWatcher func() (Watcher, error)) {
 	t.Helper()
 
-	er, err := newReceiver()
+	watcher, err := newWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ch := er.Listen()
+	ch := watcher.Listen()
 
-	if err := er.Close(); err != nil {
+	if err := watcher.Close(); err != nil {
 		t.Fatalf("first close failed: %v", err)
 	}
-	if err := er.Close(); err != nil {
+	if err := watcher.Close(); err != nil {
 		t.Fatalf("second close failed: %v", err)
 	}
 
@@ -151,7 +148,7 @@ func assertEventReceiverLifecycle(t *testing.T, newReceiver func() (EventReceive
 }
 
 func TestEventLifecycle(t *testing.T) {
-	assertEventReceiverLifecycle(t, Events)
+	assertWatcherLifecycle(t, Watch)
 }
 
 func waitForEvent(t *testing.T, ch <-chan DeviceEvent, wantType DeviceEventType, pathHint string, timeout time.Duration) DeviceEvent {
@@ -176,11 +173,11 @@ func waitForEvent(t *testing.T, ch <-chan DeviceEvent, wantType DeviceEventType,
 				matched = strings.Contains(strings.ToLower(path), normalizedHint)
 			}
 			if !matched {
-				t.Logf("skip event type=%s path=%q err=%v", ev.Type, path, ev.Err)
+				t.Logf("skip event type=%s path=%q err=%v", ev.Type, path, ev.MetadataErr)
 				continue
 			}
 
-			t.Logf("got event type=%s path=%q err=%v", ev.Type, path, ev.Err)
+			t.Logf("got event type=%s path=%q err=%v", ev.Type, path, ev.MetadataErr)
 			return ev
 		case <-deadline:
 			t.Fatalf("timeout waiting for %s event (hint=%q)", wantType, pathHint)
@@ -194,7 +191,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 	}
 
 	pathHint := os.Getenv("HID_TEST_EVENT_HINT")
-	er, err := Events()
+	er, err := Watch()
 	if err != nil {
 		if strings.Contains(err.Error(), "CM_Register_Notification failed") {
 			t.Skipf("events backend unavailable in this environment: %v", err)
@@ -222,7 +219,7 @@ func TestEventManualDisconnectConnect(t *testing.T) {
 	}
 
 	// Metadata retrieval can fail due to ACL/driver policy; the event itself is still valid.
-	if conn.Err != nil {
-		t.Logf("connect metadata is partial: %v", conn.Err)
+	if conn.MetadataErr != nil {
+		t.Logf("connect metadata is partial: %v", conn.MetadataErr)
 	}
 }

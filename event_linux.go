@@ -37,6 +37,7 @@ type linuxEventReceiver struct {
 	initializing  bool
 	startupEvents []DeviceEvent
 	devices       map[string]*DeviceInfo
+	snapshot      Snapshot
 	runErr        error
 	closeErr      error
 
@@ -45,6 +46,10 @@ type linuxEventReceiver struct {
 
 func (er *linuxEventReceiver) Listen() <-chan DeviceEvent {
 	return er.events.Listen()
+}
+
+func (er *linuxEventReceiver) Snapshot() Snapshot {
+	return er.snapshot
 }
 
 func (er *linuxEventReceiver) Close() error {
@@ -271,14 +276,6 @@ func linuxHIDRawPath(name string) string {
 	return filepath.Join(linuxDeviceDir, name)
 }
 
-func cloneLinuxDeviceInfo(info *DeviceInfo) *DeviceInfo {
-	if info == nil {
-		return nil
-	}
-	cloned := *info
-	return &cloned
-}
-
 func (er *linuxEventReceiver) onUevent(uevent linuxUevent) {
 	if !isLinuxHIDRawName(uevent.device) ||
 		(uevent.eventType != DeviceEventConnected && uevent.eventType != DeviceEventDisconnected) {
@@ -292,7 +289,7 @@ func (er *linuxEventReceiver) onUevent(uevent linuxUevent) {
 		return
 	}
 	if uevent.eventType == DeviceEventDisconnected {
-		info := cloneLinuxDeviceInfo(er.devices[path])
+		info := er.devices[path]
 		if info == nil {
 			info = &DeviceInfo{Path: path}
 		}
@@ -318,7 +315,7 @@ func (er *linuxEventReceiver) onUevent(uevent linuxUevent) {
 	if loadDeviceInfo != nil {
 		loaded, err := loadDeviceInfo(uevent.device)
 		if loaded != nil {
-			info = cloneLinuxDeviceInfo(loaded)
+			info = loaded
 		}
 		if err != nil {
 			eventErr = fmt.Errorf("read HID metadata for %s: %w", path, err)
@@ -337,9 +334,9 @@ func (er *linuxEventReceiver) onUevent(uevent linuxUevent) {
 		}
 	}
 	er.publishOrStageLocked(DeviceEvent{
-		Type:       DeviceEventConnected,
-		DeviceInfo: info,
-		Err:        eventErr,
+		Type:        DeviceEventConnected,
+		DeviceInfo:  info,
+		MetadataErr: eventErr,
 	})
 }
 
@@ -352,7 +349,7 @@ func (er *linuxEventReceiver) publishOrStageLocked(event DeviceEvent) {
 	path := event.DeviceInfo.Path
 	switch event.Type {
 	case DeviceEventConnected:
-		er.devices[path] = cloneLinuxDeviceInfo(event.DeviceInfo)
+		er.devices[path] = event.DeviceInfo
 	case DeviceEventDisconnected:
 		delete(er.devices, path)
 	}
@@ -408,9 +405,11 @@ func (er *linuxEventReceiver) publishStartup(snapshot []DeviceEvent) {
 	}
 
 	for _, event := range reconcileLinuxStartupEvents(snapshot, er.startupEvents) {
-		event.DeviceInfo = cloneLinuxDeviceInfo(event.DeviceInfo)
-		er.devices[event.DeviceInfo.Path] = cloneLinuxDeviceInfo(event.DeviceInfo)
-		er.events.Send(event)
+		er.devices[event.DeviceInfo.Path] = event.DeviceInfo
+		er.snapshot.Devices = append(er.snapshot.Devices, DeviceSnapshot{
+			DeviceInfo:  event.DeviceInfo,
+			MetadataErr: event.MetadataErr,
+		})
 	}
 	er.startupEvents = nil
 	er.initializing = false
@@ -436,16 +435,15 @@ func linuxInitialEventSnapshot() ([]DeviceEvent, error) {
 		if info == nil {
 			info = &DeviceInfo{Path: path}
 		} else {
-			info = cloneLinuxDeviceInfo(info)
 			info.Path = path
 		}
 		if infoErr != nil {
 			infoErr = fmt.Errorf("read HID metadata for %s: %w", path, infoErr)
 		}
 		events = append(events, DeviceEvent{
-			Type:       DeviceEventConnected,
-			DeviceInfo: info,
-			Err:        infoErr,
+			Type:        DeviceEventConnected,
+			DeviceInfo:  info,
+			MetadataErr: infoErr,
 		})
 	}
 	return events, nil
@@ -485,9 +483,9 @@ func openLinuxUeventSocket() (socketFD int, wakeFD int, err error) {
 	return socketFD, wakeFD, nil
 }
 
-// Events publishes a connected event for every currently enumerated HID device,
-// followed by live connection and removal events.
-func Events() (EventReceiver, error) {
+// Watch captures the current HID snapshot and then publishes later connection
+// and removal events.
+func Watch() (Watcher, error) {
 	socketFD, wakeFD, err := openLinuxUeventSocket()
 	if err != nil {
 		return nil, err
