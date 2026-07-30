@@ -333,6 +333,70 @@ func TestDeviceWriteCancellationLeavesWorkerUsable(t *testing.T) {
 	}
 }
 
+func TestDeviceRemovalUnblocksReadAndWrite(t *testing.T) {
+	original := ioHIDDeviceSetReport
+	t.Cleanup(func() {
+		ioHIDDeviceSetReport = original
+	})
+
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	ioHIDDeviceSetReport = func(_ ioHIDDeviceRef, _ ioHIDReportType, _ cfIndex, _ []byte, _ cfIndex) ioReturn {
+		close(writeStarted)
+		<-releaseWrite
+		return kIOReturnSuccess
+	}
+
+	device := newDarwinWriteTestDevice(t)
+	device.reports = make(chan []byte)
+	device.cbID = 0x1234
+	registerDevice(device.cbID, device)
+	t.Cleanup(func() {
+		unregisterDevice(device.cbID)
+	})
+
+	readResult := make(chan error, 1)
+	go func() {
+		_, err := device.Read(context.Background(), make([]byte, 64))
+		readResult <- err
+	}()
+
+	writeResult := make(chan error, 1)
+	go func() {
+		_, err := device.Write(context.Background(), []byte{0, 1})
+		writeResult <- err
+	}()
+	<-writeStarted
+
+	deviceRemovalCallback(device.cbID, kIOReturnSuccess, 0)
+
+	if err := <-readResult; !errors.Is(err, errDarwinDeviceRemoved) {
+		t.Fatalf("Read() error = %v, want %v", err, errDarwinDeviceRemoved)
+	}
+	if err := <-writeResult; !errors.Is(err, errDarwinDeviceRemoved) {
+		t.Fatalf("Write() error = %v, want %v", err, errDarwinDeviceRemoved)
+	}
+
+	close(releaseWrite)
+}
+
+func TestDeviceReadPrefersRemovalAfterReportsClose(t *testing.T) {
+	reports := make(chan []byte)
+	close(reports)
+	removed := make(chan struct{})
+	close(removed)
+	device := &Device{
+		reports: reports,
+		removed: removed,
+	}
+
+	for range 100 {
+		if _, err := device.Read(context.Background(), make([]byte, 64)); !errors.Is(err, errDarwinDeviceRemoved) {
+			t.Fatalf("Read() error = %v, want %v", err, errDarwinDeviceRemoved)
+		}
+	}
+}
+
 func newDarwinWriteTestDevice(t *testing.T) *Device {
 	t.Helper()
 
@@ -340,6 +404,7 @@ func newDarwinWriteTestDevice(t *testing.T) *Device {
 		device:                 0x1234,
 		outputReportByteLength: 4,
 		closing:                make(chan struct{}),
+		removed:                make(chan struct{}),
 		writes:                 make(chan darwinWriteRequest),
 		writeStopped:           make(chan struct{}),
 	}

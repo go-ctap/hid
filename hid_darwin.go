@@ -46,6 +46,7 @@ var (
 	ioHIDDeviceGetProperty                     func(ioHIDDeviceRef, cfStringRef) cfTypeRef
 	ioHIDDeviceGetService                      func(ioHIDDeviceRef) ioServiceRef
 	ioHIDDeviceRegisterInputReportCallback     func(ioHIDDeviceRef, uintptr, cfIndex, uintptr, uintptr)
+	ioHIDDeviceRegisterRemovalCallback         func(ioHIDDeviceRef, uintptr, uintptr)
 	ioHIDDeviceScheduleWithRunLoop             func(ioHIDDeviceRef, uintptr, cfStringRef)
 	ioHIDDeviceUnscheduleFromRunLoop           func(ioHIDDeviceRef, uintptr, cfStringRef)
 	ioHIDDeviceSetReport                       func(ioHIDDeviceRef, ioHIDReportType, cfIndex, []byte, cfIndex) ioReturn
@@ -56,11 +57,14 @@ var (
 	cfDictionaryKeyCB    uintptr
 	cfDictionaryValueCB  uintptr
 
-	inputReportCallbackPtr = purego.NewCallback(inputReportCallback)
-	activeDevicesMu        sync.RWMutex
-	activeDevices          = make(map[uintptr]*Device)
-	deviceSeq              atomic.Uint64
+	inputReportCallbackPtr   = purego.NewCallback(inputReportCallback)
+	deviceRemovalCallbackPtr = purego.NewCallback(deviceRemovalCallback)
+	activeDevicesMu          sync.RWMutex
+	activeDevices            = make(map[uintptr]*Device)
+	deviceSeq                atomic.Uint64
 )
+
+var errDarwinDeviceRemoved = errors.New("HID device removed")
 
 type darwinWriteRequest struct {
 	report []byte
@@ -106,6 +110,7 @@ func init() {
 	purego.RegisterLibFunc(&ioHIDDeviceGetProperty, ioKit, "IOHIDDeviceGetProperty")
 	purego.RegisterLibFunc(&ioHIDDeviceGetService, ioKit, "IOHIDDeviceGetService")
 	purego.RegisterLibFunc(&ioHIDDeviceRegisterInputReportCallback, ioKit, "IOHIDDeviceRegisterInputReportCallback")
+	purego.RegisterLibFunc(&ioHIDDeviceRegisterRemovalCallback, ioKit, "IOHIDDeviceRegisterRemovalCallback")
 	purego.RegisterLibFunc(&ioHIDDeviceScheduleWithRunLoop, ioKit, "IOHIDDeviceScheduleWithRunLoop")
 	purego.RegisterLibFunc(&ioHIDDeviceUnscheduleFromRunLoop, ioKit, "IOHIDDeviceUnscheduleFromRunLoop")
 	purego.RegisterLibFunc(&ioHIDDeviceSetReport, ioKit, "IOHIDDeviceSetReport")
@@ -166,6 +171,7 @@ func OpenPath(path string) (*Device, error) {
 			ready:                  make(chan struct{}),
 			stopped:                make(chan struct{}),
 			closing:                make(chan struct{}),
+			removed:                make(chan struct{}),
 			writes:                 make(chan darwinWriteRequest),
 			writeStopped:           make(chan struct{}),
 		}
@@ -207,9 +213,16 @@ func (d *Device) Read(ctx context.Context, p []byte) (int, error) {
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
+	case <-d.removed:
+		return 0, errDarwinDeviceRemoved
 
 	case report, ok := <-d.reports:
 		if !ok {
+			select {
+			case <-d.removed:
+				return 0, errDarwinDeviceRemoved
+			default:
+			}
 			return 0, errors.New("device closed")
 		}
 
@@ -231,6 +244,8 @@ func (d *Device) Write(ctx context.Context, p []byte) (int, error) {
 		return 0, ctx.Err()
 	case <-d.closing:
 		return 0, errors.New("device closed")
+	case <-d.removed:
+		return 0, errDarwinDeviceRemoved
 	case d.writes <- request:
 	}
 
@@ -239,6 +254,8 @@ func (d *Device) Write(ctx context.Context, p []byte) (int, error) {
 		return 0, ctx.Err()
 	case <-d.closing:
 		return 0, errors.New("device closed")
+	case <-d.removed:
+		return 0, errDarwinDeviceRemoved
 	case result := <-request.result:
 		return result.n, result.err
 	}
@@ -253,10 +270,15 @@ func (d *Device) runWrites() {
 		select {
 		case <-d.closing:
 			return
+		case <-d.removed:
+			return
 		case request := <-d.writes:
 			select {
 			case <-d.closing:
 				request.result <- ioResult{err: errors.New("device closed")}
+				return
+			case <-d.removed:
+				request.result <- ioResult{err: errDarwinDeviceRemoved}
 				return
 			default:
 			}
@@ -377,15 +399,22 @@ func (d *Device) run() {
 		inputReportCallbackPtr,
 		d.cbID,
 	)
+	ioHIDDeviceRegisterRemovalCallback(d.device, deviceRemovalCallbackPtr, d.cbID)
 	ioHIDDeviceScheduleWithRunLoop(d.device, d.runLoop, cfRunLoopDefaultMode)
 	close(d.ready)
 
+runLoop:
 	for {
 		d.closeMu.Lock()
 		closed := d.closed
 		d.closeMu.Unlock()
 		if closed {
 			break
+		}
+		select {
+		case <-d.removed:
+			break runLoop
+		default:
 		}
 
 		// A finite timeout also covers Close racing with the first run-loop call.
@@ -425,6 +454,23 @@ func inputReportCallback(context uintptr, result ioReturn, sender uintptr, repor
 	case d.reports <- copied:
 	default:
 	}
+}
+
+func deviceRemovalCallback(context uintptr, _ ioReturn, _ uintptr) {
+	d, ok := deviceByCallbackID(context)
+	if !ok {
+		return
+	}
+
+	d.removeOnce.Do(func() {
+		close(d.removed)
+	})
+
+	d.closeMu.Lock()
+	if d.runLoop != 0 {
+		cfRunLoopStop(d.runLoop)
+	}
+	d.closeMu.Unlock()
 }
 
 func registerDevice(id uintptr, device *Device) {

@@ -50,11 +50,13 @@ type Device struct {
 	ready        chan struct{}
 	stopped      chan struct{}
 	closing      chan struct{}
+	removed      chan struct{}
 	writes       chan darwinWriteRequest
 	writeStopped chan struct{}
 
-	runLoop uintptr
-	cbID    uintptr
-	closeMu sync.Mutex
-	closed  bool
+	runLoop    uintptr
+	cbID       uintptr
+	closeMu    sync.Mutex
+	removeOnce sync.Once
+	closed     bool
 }
