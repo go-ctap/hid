@@ -2,6 +2,7 @@ package hid
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"os"
 	"path/filepath"
@@ -140,6 +141,10 @@ func OpenPath(path string) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := unix.SetNonblock(int(dev.Fd()), true); err != nil {
+		_ = dev.Close()
+		return nil, err
+	}
 
 	return &Device{
 		file: dev,
@@ -147,14 +152,21 @@ func OpenPath(path string) (*Device, error) {
 }
 
 func (d *Device) Read(ctx context.Context, b []byte) (int, error) {
-	result := runIO(ctx, &d.readMu, func() ioResult {
-		buf := make([]byte, len(b))
-		n, err := d.file.Read(buf)
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
 
-		return ioResult{n: n, data: buf[:n], err: err}
-	})
+	fd := int(d.file.Fd())
+	for {
+		if err := waitLinuxReadable(ctx, fd); err != nil {
+			return 0, err
+		}
 
-	return copy(b, result.data), result.err
+		n, err := unix.Read(fd, b)
+		if errors.Is(err, unix.EAGAIN) {
+			continue
+		}
+		return n, err
+	}
 }
 
 func (d *Device) Write(ctx context.Context, b []byte) (int, error) {

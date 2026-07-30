@@ -5,11 +5,57 @@ package hid
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestDeviceReadCancellationLeavesReadUsable(t *testing.T) {
+	var pipe [2]int
+	if err := unix.Pipe2(pipe[:], unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
+		t.Fatal(err)
+	}
+	device := &Device{file: os.NewFile(uintptr(pipe[0]), "test pipe")}
+	defer func() {
+		_ = device.Close()
+		_ = unix.Close(pipe[1])
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := device.Read(ctx, make([]byte, 1))
+		done <- err
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("poll did not stop after cancellation")
+	}
+
+	if _, err := unix.Write(pipe[1], []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRead()
+	buffer := make([]byte, 1)
+	n, err := device.Read(readCtx, buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || buffer[0] != 1 {
+		t.Fatalf("Read() = %d bytes %v, want [1]", n, buffer)
+	}
+}
 
 func TestRunIOSuccess(t *testing.T) {
 	var mu sync.Mutex
