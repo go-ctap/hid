@@ -238,8 +238,8 @@ func TestLinuxAddPublishesPartialDeviceInfo(t *testing.T) {
 		t.Fatalf("partial event = %#v", event)
 	}
 	cached := receiver.devices["/dev/hidraw9"]
-	if cached == nil || cached == event.DeviceInfo || cached.VendorID != 0x1050 {
-		t.Fatalf("receiver cache = %#v, want a separate metadata copy", cached)
+	if cached != loaded || cached != event.DeviceInfo || cached.VendorID != 0x1050 {
+		t.Fatalf("receiver cache = %#v, want the loaded metadata pointer", cached)
 	}
 }
 
