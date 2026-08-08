@@ -1,11 +1,11 @@
-# go-ctap/hid
+# telesma-app/hid
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/telesma-app/hid.svg)](https://pkg.go.dev/github.com/telesma-app/hid)
 [![Go](https://github.com/telesma-app/hid/actions/workflows/go.yml/badge.svg)](https://github.com/telesma-app/hid/actions/workflows/go.yml)
 
-`go-ctap/hid` is a cgo-free Go library for discovering and communicating with HID devices on Windows, macOS, and Linux. It uses native operating-system facilities and requires neither `libhidapi` nor a C toolchain.
+`telesma-app/hid` is a cgo-free Go library for discovering and communicating with HID devices on Windows, macOS, and Linux. It uses native operating-system facilities and requires neither `libhidapi` nor a C toolchain.
 
-The library was created primarily as the HID backend for [`go-ctap/ctap`](https://github.com/telesma-app/ctap), but it is protocol-agnostic and can be used independently with other HID devices. The module is currently pre-v1, so its API may continue to evolve between minor releases.
+The library was created primarily as the HID backend for [`telesma-app/ctap`](https://github.com/telesma-app/ctap), but it is protocol-agnostic and can be used independently with other HID devices. The module is currently pre-v1, so its API may continue to evolve between minor releases.
 
 ## Supported platforms
 
@@ -29,7 +29,7 @@ go get github.com/telesma-app/hid
 
 ## Usage
 
-`Enumerate` returns a Go iterator. Filters are exact matches and can be combined; this example selects the FIDO HID usage collection used by `go-ctap`:
+`Enumerate` returns a Go iterator. Filters are exact matches and can be combined; this example selects the FIDO HID usage collection used by `telesma-app`:
 
 ```go
 for info, err := range hid.Enumerate(
@@ -51,7 +51,7 @@ for info, err := range hid.Enumerate(
 }
 ```
 
-Pass `DeviceInfo.Path` to `OpenPath` to get a device with `Read`, `Write`, `SendFeatureReport`, `GetFeatureReport`, and `Close`. Output and feature-report buffers begin with the report ID; use `0` for an unnumbered report. Higher-level framing, such as CTAPHID, is intentionally left to packages such as [`go-ctap/ctap`](https://github.com/telesma-app/ctap).
+Pass `DeviceInfo.Path` to `OpenPath` to get a device with `Read`, `Write`, `SendFeatureReport`, `GetFeatureReport`, and `Close`. Output and feature-report buffers begin with the report ID; use `0` for an unnumbered report. Higher-level framing, such as CTAPHID, is intentionally left to packages such as [`telesma-app/ctap`](https://github.com/telesma-app/ctap).
 
 Reads and writes accept a context because they can block. Cancellation is best-effort:
 
