@@ -1,4 +1,4 @@
-module github.com/go-ctap/hid
+module github.com/telesma-app/hid
 
 go 1.25.0
 

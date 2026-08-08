@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/go-ctap/hid/reportparser"
+	"github.com/telesma-app/hid/reportparser"
 	"golang.org/x/sys/unix"
 )
 
